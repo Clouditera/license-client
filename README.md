@@ -1,7 +1,7 @@
 # @clouditera/license-mgr
 
 > Standalone license management module extracted from `CortexDev-Agents/src/main/core/license/`.
-> Status: **scaffold (v1.0.0-alpha.0)** — implementation in progress.
+> Status: **alpha (v1.0.0-alpha.0)** — port complete, awaiting downstream wire-up.
 
 ## 范围
 
@@ -29,53 +29,144 @@ echo "@clouditera:registry=https://npm.pkg.github.com" >> .npmrc
 pnpm add @clouditera/license-mgr
 ```
 
+## 解耦设计
+
+模块对宿主环境的依赖（Electron `app`、`@main/lib/logger`、内置 Pro 二进制下载器等）通过 **module-level setter 注入**实现，默认值都是 no-op 或安全 fallback。宿主在启动时按需注入：
+
+| Setter | 注入对象 | 默认行为 |
+|---|---|---|
+| `setProductionBuildResolver(fn)` | `() => boolean`，判断是否打包发布 | `() => false`（dev 模式） |
+| `setLogger(impl)` | crypto 模块的 debug 日志 | no-op |
+| `setLegacyKeyHitListener(fn)` | LEGACY-key 命中遥测 | `null` |
+| `setServiceLogger(impl)` | LicenseService 的 warn/error 日志 | no-op |
+| `setHostEnvironment(env)` | `isPackaged()` / 可选 `getUserDataDir()` | `isPackaged: () => false` |
+| `setBinaryDownloadHooks(hooks)` | 可选的 Pro 二进制清理 / 自动下载钩子 | 不执行（CLI 宿主无需提供） |
+
 ## 快速接入
 
+### Electron 主进程（DevAgent-App）
+
 ```typescript
-import { LicenseService } from '@clouditera/license-mgr';
+import { app } from 'electron';
+import { log } from './main/lib/logger.js';
+import {
+  licenseService,
+  setHostEnvironment,
+  setServiceLogger,
+  setProductionBuildResolver,
+  setLegacyKeyHitListener,
+} from '@clouditera/license-mgr';
 
-const service = new LicenseService({
-  configDir: '/Users/foo/.cortexdev-pro',
-  isProductionBuild: true,
-  logger: console,
+setProductionBuildResolver(() => app.isPackaged);
+setHostEnvironment({
+  isPackaged: () => app.isPackaged,
+  getUserDataDir: () => app.getPath('userData'),
 });
+setServiceLogger(log);
+setLegacyKeyHitListener((label) => log.warn(`legacy-key hit: ${label}`));
 
-await service.initialize();
-const status = service.getStatus();
+await licenseService.initialize();
+const status = licenseService.getStatus();
 if (status.state === 'active') {
   // 主流程
 }
 ```
 
+### CLI 宿主（DevAgent-CLI / DevEye）
+
+```typescript
+import {
+  LicenseService,
+  setHostEnvironment,
+  setProductionBuildResolver,
+} from '@clouditera/license-mgr';
+
+setProductionBuildResolver(() => true);
+setHostEnvironment({ isPackaged: () => true });
+
+const service = new LicenseService();
+await service.initialize();
+```
+
+## 公共 API
+
+```typescript
+// Top-level orchestrator
+LicenseService, licenseService
+
+// Validation pipeline
+validateLicense(licenseFile, fingerprint, opts?)
+validatePayload(payload)
+isExpired(payload)
+isExpiredWithServerTime(payload, serverTime?)
+
+// Crypto
+verifySignature(payload, signature, publicKey?)
+canonicalize(obj)
+getPublicKey()
+LEGACY_KEY_SUNSET
+
+// Device fingerprint
+collectFingerprint(opts?)
+collectFingerprintComponents()
+matchFingerprint(expected, collected)
+
+// Persistence
+readLicense(configDir), writeLicense, deleteLicense
+readActivationMeta(configDir), writeActivationMeta
+resolveConfigDir(), getLicenseDir(configDir)
+
+// Online client
+onlineActivate(req), onlineRefresh(req)
+
+// Injection setters
+setHostEnvironment, setServiceLogger, setProductionBuildResolver,
+setLogger, setLegacyKeyHitListener, setBinaryDownloadHooks
+
+// Result helpers
+ok(value), err(error)
+```
+
+完整类型导出见 `src/index.ts`。
+
+## 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `CORTEXDEV_PUBLIC_KEY` | 内置 DEV/PROD/LEGACY keys | 覆盖签名验证公钥 |
+| `CORTEXDEV_LICENSE_API_URL` | `https://license.cloudrouter.online` | 覆盖 license server 地址 |
+| `CORTEXDEV_CONFIG_DIR` | `~/.cortexdev-pro` | 覆盖 config 根目录 |
+| `CORTEXDEV_PRO_CONFIG_DIR` | （fallback） | 旧名，向后兼容 |
+
 ## 开发
 
 ```bash
 pnpm install
-pnpm test          # 单元测试
+pnpm test          # 单元测试（vitest）
 pnpm test:coverage # 覆盖率（目标 ≥90%）
 pnpm typecheck
 pnpm lint
-pnpm build         # 输出到 dist/
+pnpm build         # 输出到 dist/（ESM + CJS + d.ts）
 pnpm ci            # 本地完整 CI（fail-fast）
 ```
 
-## 模块结构（规划）
+## 模块结构
 
 | 文件 | 对应现有 | 状态 |
 |---|---|---|
-| `src/result.ts` | （新增，替代 `@shared/result`） | ✅ scaffold |
-| `src/types.ts` | `src/main/core/license/types.ts` | ⏳ |
-| `src/crypto.ts` | `src/main/core/license/crypto.ts` | ⏳ |
-| `src/schema.ts` | `src/main/core/license/schema.ts` | ⏳ |
-| `src/fingerprint.ts` | `src/main/core/license/fingerprint.ts` | ⏳ |
-| `src/store.ts` | `src/main/core/license/store.ts` | ⏳ |
-| `src/validator.ts` | `src/main/core/license/validator.ts` | ⏳ |
-| `src/online-client.ts` | `src/main/core/license/online-client.ts` | ⏳ |
-| `src/license-service.ts` | `src/main/core/license/license-service.ts` | ⏳ |
+| `src/result.ts` | （新增，替代 `@shared/result`） | ✅ |
+| `src/types.ts` | `src/main/core/license/types.ts` | ✅ |
+| `src/crypto.ts` | `src/main/core/license/crypto.ts` | ✅ |
+| `src/schema.ts` | `src/main/core/license/schema.ts` | ✅ |
+| `src/fingerprint.ts` | `src/main/core/license/fingerprint.ts` | ✅ |
+| `src/store.ts` | `src/main/core/license/store.ts` | ✅ |
+| `src/validator.ts` | `src/main/core/license/validator.ts` | ✅ |
+| `src/online-client.ts` | `src/main/core/license/online-client.ts` | ✅ |
+| `src/license-service.ts` | `src/main/core/license/license-service.ts` | ✅ |
 
 ## 路线图
 
-详见上游需求文档 §1.4 Phase 1–8。本仓库当前处于 Phase 1（抽取与发布）。
+详见上游需求文档 §1.4 Phase 1–8。当前处于 Phase 1（抽取与发布）末尾，正准备 Phase 2（CortexDev-Agents 接入替换）。
 
 ## License
 
