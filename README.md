@@ -7,7 +7,7 @@
 
 为 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品提供统一的 license 校验与生命周期管理。**事实统一源**（single source of truth），替代当前两份内嵌实现（CortexDev-Agents 主进程 + cortexdev-pro CLI 内部）。
 
-完整需求文档：`CortexDev-Agents/docs/dev/license-standalone/license-standalone-requirements.md`
+完整需求文档：[`docs/requirements.md`](./docs/requirements.md)
 
 ## 核心约束
 
