@@ -145,7 +145,7 @@ describe('onlineActivate', () => {
       string,
       RequestInit,
     ];
-    expect(url).toBe('https://license.cloudrouter.online/api/v1/activate');
+    expect(url).toBe('https://license.clouditera.online/api/v1/activate');
   });
 
   it('returns Err with device_limit_exceeded on 409', async () => {

@@ -24,7 +24,7 @@ import { err, ok, type Result } from './result.js';
 // Configuration
 // ---------------------------------------------------------------------------
 
-const PRODUCTION_BASE_URL = 'https://license.cloudrouter.online';
+const PRODUCTION_BASE_URL = 'https://license.clouditera.online';
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function getBaseUrl(): string {

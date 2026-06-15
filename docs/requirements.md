@@ -300,7 +300,7 @@ Phase 8: 其他演进（不在本文档范围）
 
 完整保留：
 
-- **URL**：`https://license.cloudrouter.online`（生产）
+- **URL**：`https://license.clouditera.online`（生产）
 - 环境变量覆盖：`CORTEXDEV_LICENSE_API_URL`
 - 端点：`POST /api/v1/activate` 与 `POST /api/v1/refresh`
 - 请求/响应 schema（与现状字节一致）
@@ -542,7 +542,7 @@ import type {
 
 ### M3. HTTP 契约：**完全不变**
 
-- URL：`https://license.cloudrouter.online`
+- URL：`https://license.clouditera.online`
 - 端点路径、请求/响应、错误码、超时全部维持
 - 签发端（`devagent-cli` 仓库内）**无需任何改造**
 
@@ -782,7 +782,7 @@ Phase 8: 进入功能演进期
 - 现有 CLI 实现：`vendor/cortexdev-pro/packages/core/src/license/`（git submodule）
 - 现有 IPC controller：`src/main/core/license/controller.ts`
 - 现有渲染层：`src/renderer/features/activation/`
-- License API：`https://license.cloudrouter.online`（生产 URL，禁止随意修改，详见 `CLAUDE.md` §一.5）
+- License API：`https://license.clouditera.online`（生产 URL，2026-06-14 由 `license.cloudrouter.online` 切换；同 Cloudflare 账号下新注册域名 `clouditera.online`，继续 Cloudflare Workers 承载，全球边缘访问不变；变更需走评审）
 - 现有需求初稿（V1 离线版，已废弃）：本文件历史版本 v0.1
 - 主项目 CLAUDE.md：`/CLAUDE.md`
 

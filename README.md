@@ -134,7 +134,7 @@ ok(value), err(error)
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `CORTEXDEV_PUBLIC_KEY` | 内置 DEV/PROD/LEGACY keys | 覆盖签名验证公钥 |
-| `CORTEXDEV_LICENSE_API_URL` | `https://license.cloudrouter.online` | 覆盖 license server 地址 |
+| `CORTEXDEV_LICENSE_API_URL` | `https://license.clouditera.online` | 覆盖 license server 地址 |
 | `CORTEXDEV_CONFIG_DIR` | `~/.cortexdev-pro` | 覆盖 config 根目录 |
 | `CORTEXDEV_PRO_CONFIG_DIR` | （fallback） | 旧名，向后兼容 |
 

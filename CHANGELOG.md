@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- License API production URL switched from `https://license.cloudrouter.online`
+  to `https://license.clouditera.online`. Same Cloudflare account / same Workers
+  runtime — only the domain changes. `CORTEXDEV_LICENSE_API_URL` override still
+  takes precedence. No request/response schema or error-code changes.
+
 ## [1.0.0-alpha.0] - 2026-06-09
 
 ### Added
