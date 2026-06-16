@@ -29,6 +29,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { LEGACY_KEY_SUNSET, setLegacyKeyHitListener } from './crypto.js';
 import { collectFingerprint } from './fingerprint.js';
+import { verifyOnlineCheckToken } from './online-check.js';
+import { readOnlineCheck } from './online-check-store.js';
 import {
   onlineActivate,
   onlineRefresh,
@@ -43,12 +45,14 @@ import {
   writeActivationMeta,
   writeLicense,
 } from './store.js';
+import { EMBEDDED_TOKEN_PUBLIC_KEY } from './token-key.js';
 import type {
   ActivationMeta,
   ActivationResult,
   LicenseErrorReason,
   LicenseFile,
   LicenseStatus,
+  OfflineGraceResult,
   RefreshOutcome,
   RefreshRejectionReason,
 } from './types.js';
@@ -90,6 +94,23 @@ export interface HostEnvironment {
   isPackaged: () => boolean;
   /** The directory where binary downloads / stale tmp files live (CLI binaries dir). */
   getUserDataDir?: () => string;
+  /**
+   * Number of days the legacy unsigned `last_online_check` keeps a user
+   * authorised when offline. Mirrors CLI gate.js `OFFLINE_GRACE_DAYS`.
+   *   - DevAgent-App historical default: 14
+   *   - DevAgent-CLI historical default: 60
+   * Adapters wire this to whichever value preserves their existing user
+   * behaviour. Defaults to 14 to preserve license-mgr's pre-D4 contract.
+   */
+  offlineGraceDays?: number;
+  /**
+   * When true, `checkOfflineGrace()` refuses to fall back to the unsigned
+   * Path B (legacy `last_online_check`) — only a server-signed D4 token can
+   * authorise an offline session. Mirrors CLI gate.js
+   * `LICENSE_REQUIRE_SIGNED_TOKEN=true` env. Compliance-sensitive deployments
+   * (where unsigned grace is unacceptable) flip this on.
+   */
+  requireSignedToken?: boolean;
 }
 
 let hostEnv: HostEnvironment = {
@@ -241,6 +262,108 @@ export class LicenseService {
 
   getStatus(): LicenseStatus {
     return this.status;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Offline grace decision (D4)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Decide whether the local license is allowed to operate offline based on
+   * the most recent server contact recorded in `online-check.json`.
+   *
+   * Mirrors CLI gate.js `checkOfflineGrace()` so adapters can map 1:1:
+   *
+   *   Path A — server-signed D4 token (`signed_token`):
+   *     - valid              → authorized + daysLeft from token.expires_at
+   *     - reason: malformed  → fall through to Path B (legacy file format)
+   *     - reason: id_mismatch / expired / invalid_signature → HARD FAIL with
+   *       `tokenFailure` populated. NEVER fall through to Path B on these;
+   *       otherwise an attacker who breaks the signature could slide back
+   *       into the more permissive unsigned window.
+   *
+   *   Path B — legacy unsigned `last_online_check` + `server_time`:
+   *     - hostEnv.requireSignedToken === true → refuse Path B entirely
+   *     - daysSince < 0 (clock rollback)      → clock_anomaly
+   *     - daysSince > offlineGraceDays         → offline_expired + lastCheck
+   *     - else                                 → authorized
+   *
+   * Returns offline_expired when the file is missing or unreadable.
+   *
+   * Pure read — never writes; never reaches the network.
+   */
+  checkOfflineGrace(): OfflineGraceResult {
+    const data = readOnlineCheck(this.configDir);
+    if (!data) {
+      return { authorized: false, reason: 'offline_expired' };
+    }
+
+    // Path A — D4 signed_token. We need the local license_id to detect cross
+    // -account replay. If the license file is missing the outer gate flow has
+    // already rejected the session, but we tolerate the read failure here so
+    // a partially-installed state degrades to "no Path A, try Path B".
+    const license = readLicense(this.configDir);
+    const licenseId = license?.payload?.license_id;
+    if (data.signed_token && licenseId) {
+      const verdict = verifyOnlineCheckToken(
+        data.signed_token,
+        licenseId,
+        EMBEDDED_TOKEN_PUBLIC_KEY
+      );
+      if (verdict.valid) {
+        const expiresMs = Date.parse(data.signed_token.payload.expires_at);
+        const daysLeft = Math.max(0, Math.ceil((expiresMs - Date.now()) / (1000 * 60 * 60 * 24)));
+        return { authorized: true, daysLeft, source: 'signed_token' };
+      }
+      // `malformed` = old/corrupt file → fall through. Any other failure mode
+      // is a hard fail with the reason surfaced for logging / UI.
+      if (verdict.reason !== 'malformed') {
+        return {
+          authorized: false,
+          reason: 'offline_expired',
+          tokenFailure: verdict.reason,
+        };
+      }
+    }
+
+    // Path B — legacy unsigned window. Can be disabled by adapter for compliance.
+    if (hostEnv.requireSignedToken === true) {
+      return { authorized: false, reason: 'offline_expired' };
+    }
+
+    if (!data.last_online_check) {
+      return { authorized: false, reason: 'offline_expired' };
+    }
+
+    // Prefer server_time for staleness; fall back to last_online_check.
+    const referenceTimestamp = data.server_time ?? data.last_online_check;
+    const referenceMs = new Date(referenceTimestamp).getTime();
+    if (!Number.isFinite(referenceMs)) {
+      return { authorized: false, reason: 'offline_expired' };
+    }
+
+    const daysSince = (Date.now() - referenceMs) / (1000 * 60 * 60 * 24);
+
+    // Clock rollback detection: negative daysSince means local clock is behind
+    // server_time, which the user (or an attacker) cannot otherwise reach.
+    if (daysSince < 0) {
+      return { authorized: false, reason: 'clock_anomaly' };
+    }
+
+    const graceDays = hostEnv.offlineGraceDays ?? OFFLINE_GRACE_DAYS;
+    if (daysSince > graceDays) {
+      return {
+        authorized: false,
+        reason: 'offline_expired',
+        lastCheck: data.last_online_check,
+      };
+    }
+
+    return {
+      authorized: true,
+      daysLeft: Math.ceil(graceDays - daysSince),
+      source: 'last_online_check',
+    };
   }
 
   async activate(licenseJson: string): Promise<ActivationResult> {

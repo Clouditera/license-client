@@ -65,6 +65,12 @@ export {
 export { verifyOnlineCheckToken } from './online-check.js';
 
 // ---------------------------------------------------------------------------
+// Online-check persistence (online-check.json on disk)
+// ---------------------------------------------------------------------------
+
+export { readOnlineCheck, writeOnlineCheck } from './online-check-store.js';
+
+// ---------------------------------------------------------------------------
 // Crypto (signature verification + key resolution)
 // ---------------------------------------------------------------------------
 

@@ -36,10 +36,35 @@ vi.mock('./validator.js', () => ({
 vi.mock('./crypto.js', () => ({
   LEGACY_KEY_SUNSET: '2030-01-01',
   setLegacyKeyHitListener: vi.fn(),
+  // token-key.ts (transitively imported through license-service → token-key)
+  // calls isProductionBuild() at module load. The crypto mock must surface
+  // the same symbol; default to false (dev mode) so token-key's load path
+  // returns DEV_TOKEN_KEY without hitting any prod-only collision guards.
+  isProductionBuild: vi.fn(() => false),
+  // verifySignature is reached when checkOfflineGrace's Path A verifies a
+  // signed token. Tests that exercise Path A wire their own assertions on
+  // top of this mock.
+  verifySignature: vi.fn(() => true),
 }));
 
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
+}));
+
+vi.mock('./online-check-store.js', () => ({
+  readOnlineCheck: vi.fn(),
+  writeOnlineCheck: vi.fn(),
+}));
+
+vi.mock('./online-check.js', () => ({
+  verifyOnlineCheckToken: vi.fn(),
+}));
+
+vi.mock('./token-key.js', () => ({
+  EMBEDDED_TOKEN_PUBLIC_KEY: 'TEST-EMBEDDED-TOKEN-KEY',
+  DEV_TOKEN_KEY: 'TEST-DEV-TOKEN-KEY',
+  PROD_TOKEN_KEY: 'TEST-PROD-TOKEN-KEY',
+  publicKeysEqual: vi.fn(() => false),
 }));
 
 const storeMock = await import('./store.js');
@@ -47,6 +72,8 @@ const fingerprintMock = await import('./fingerprint.js');
 const onlineMock = await import('./online-client.js');
 const validatorMock = await import('./validator.js');
 const fsMock = await import('node:fs');
+const onlineCheckStoreMock = await import('./online-check-store.js');
+const onlineCheckMock = await import('./online-check.js');
 const { LicenseService, setHostEnvironment, setServiceLogger, setBinaryDownloadHooks } =
   await import('./license-service.js');
 
@@ -845,6 +872,297 @@ describe('LicenseService', () => {
       setPackaged(false);
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // checkOfflineGrace() — D4 / Path A + Path B decision tree
+  // -------------------------------------------------------------------------
+  describe('checkOfflineGrace', () => {
+    const SIGNED_TOKEN_FIXTURE = {
+      payload: {
+        license_id: 'lic-123',
+        server_time: '2026-06-15T00:00:00.000Z',
+        expires_at: '2026-06-22T00:00:00.000Z',
+      },
+      signature: 'base64-sig',
+    };
+
+    beforeEach(() => {
+      // Default: no online-check.json on disk, no license file, no D4 token.
+      // Individual tests opt into more interesting scenarios.
+      vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue(null);
+      vi.mocked(storeMock.readLicense).mockReturnValue(null);
+      vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({ valid: true });
+      // Reset the requireSignedToken/offlineGraceDays host-env overrides.
+      setHostEnvironment({
+        isPackaged: () => isPackagedValue,
+        getUserDataDir: () => '/fake/userData',
+      });
+    });
+
+    it('returns offline_expired when online-check.json is missing', () => {
+      const svc = new LicenseService();
+      expect(svc.checkOfflineGrace()).toEqual({ authorized: false, reason: 'offline_expired' });
+    });
+
+    // ─── Path A — signed_token ────────────────────────────────────────────
+    describe('Path A (signed_token)', () => {
+      it('authorizes when token is valid, surfaces daysLeft from token.expires_at', () => {
+        const futureMs = Date.now() + 6 * 24 * 60 * 60 * 1000;
+        const token = {
+          payload: {
+            license_id: 'lic-123',
+            server_time: new Date().toISOString(),
+            expires_at: new Date(futureMs).toISOString(),
+          },
+          signature: 'base64-sig',
+        };
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: new Date().toISOString(),
+          signed_token: token,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({ valid: true });
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.source).toBe('signed_token');
+        expect(result.daysLeft).toBeGreaterThan(0);
+        expect(result.daysLeft).toBeLessThanOrEqual(7);
+      });
+
+      it('hard-fails with tokenFailure on id_mismatch (does NOT fall through to Path B)', () => {
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: new Date().toISOString(), // would have made Path B authorize
+          signed_token: SIGNED_TOKEN_FIXTURE,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({
+          valid: false,
+          reason: 'id_mismatch',
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+          tokenFailure: 'id_mismatch',
+        });
+      });
+
+      it('hard-fails with tokenFailure on expired token', () => {
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: new Date().toISOString(),
+          signed_token: SIGNED_TOKEN_FIXTURE,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({
+          valid: false,
+          reason: 'expired',
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+          tokenFailure: 'expired',
+        });
+      });
+
+      it('hard-fails with tokenFailure on invalid_signature', () => {
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: new Date().toISOString(),
+          signed_token: SIGNED_TOKEN_FIXTURE,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({
+          valid: false,
+          reason: 'invalid_signature',
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+          tokenFailure: 'invalid_signature',
+        });
+      });
+
+      it('falls through to Path B on `malformed` verdict (legacy file tolerance)', () => {
+        const past = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(); // 1 day ago
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: past,
+          server_time: past,
+          signed_token: { payload: undefined, signature: undefined } as never,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({
+          valid: false,
+          reason: 'malformed',
+        });
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.source).toBe('last_online_check');
+      });
+
+      it('skips Path A when local license file is missing (degrades to Path B)', () => {
+        const recent = new Date().toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: recent,
+          server_time: recent,
+          signed_token: SIGNED_TOKEN_FIXTURE,
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(null); // no license_id available
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.source).toBe('last_online_check');
+        expect(onlineCheckMock.verifyOnlineCheckToken).not.toHaveBeenCalled();
+      });
+    });
+
+    // ─── Path B — legacy unsigned window ───────────────────────────────────
+    describe('Path B (legacy unsigned grace)', () => {
+      it('authorizes within the window, daysLeft based on (graceDays - daysSince)', () => {
+        const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: oneDayAgo,
+          server_time: oneDayAgo,
+        });
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.source).toBe('last_online_check');
+        expect(result.daysLeft).toBe(13); // default 14d - 1d
+      });
+
+      it('returns offline_expired when daysSince exceeds the default 14-day window', () => {
+        const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: fifteenDaysAgo,
+          server_time: fifteenDaysAgo,
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+          lastCheck: fifteenDaysAgo,
+        });
+      });
+
+      it('honours hostEnv.offlineGraceDays override (CLI maps this to 60)', () => {
+        setHostEnvironment({
+          isPackaged: () => false,
+          getUserDataDir: () => '/fake/userData',
+          offlineGraceDays: 60,
+        });
+        const twentyDaysAgo = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: twentyDaysAgo,
+          server_time: twentyDaysAgo,
+        });
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.daysLeft).toBe(40); // 60 - 20
+      });
+
+      it('detects clock rollback when daysSince < 0', () => {
+        const oneHourFuture = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: oneHourFuture,
+          server_time: oneHourFuture,
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'clock_anomaly',
+        });
+      });
+
+      it('returns offline_expired when last_online_check is missing entirely', () => {
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: '',
+        });
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+        });
+      });
+
+      it('returns offline_expired when server_time/last_online_check is unparseable', () => {
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: 'not-a-date',
+        });
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+        });
+      });
+
+      it('prefers server_time over last_online_check when both present', () => {
+        // last_online_check is 1 day ago (would authorise), but server_time is
+        // 20 days ago — the legacy gate uses server_time as authoritative.
+        const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+        const twentyDaysAgo = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: oneDayAgo,
+          server_time: twentyDaysAgo,
+        });
+
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+          lastCheck: oneDayAgo,
+        });
+      });
+    });
+
+    // ─── requireSignedToken — Path B bypass ────────────────────────────────
+    describe('requireSignedToken (compliance hardening)', () => {
+      it('refuses Path B entirely when hostEnv.requireSignedToken === true', () => {
+        setHostEnvironment({
+          isPackaged: () => false,
+          getUserDataDir: () => '/fake/userData',
+          requireSignedToken: true,
+        });
+        const recent = new Date().toISOString();
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: recent,
+          server_time: recent,
+        });
+
+        // Path B would have authorised, but requireSignedToken blocks it.
+        expect(new LicenseService().checkOfflineGrace()).toEqual({
+          authorized: false,
+          reason: 'offline_expired',
+        });
+      });
+
+      it('Path A still works under requireSignedToken=true', () => {
+        setHostEnvironment({
+          isPackaged: () => false,
+          getUserDataDir: () => '/fake/userData',
+          requireSignedToken: true,
+        });
+        const futureMs = Date.now() + 5 * 24 * 60 * 60 * 1000;
+        vi.mocked(onlineCheckStoreMock.readOnlineCheck).mockReturnValue({
+          last_online_check: new Date().toISOString(),
+          signed_token: {
+            payload: {
+              license_id: 'lic-123',
+              server_time: new Date().toISOString(),
+              expires_at: new Date(futureMs).toISOString(),
+            },
+            signature: 'sig',
+          },
+        });
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        vi.mocked(onlineCheckMock.verifyOnlineCheckToken).mockReturnValue({ valid: true });
+
+        const result = new LicenseService().checkOfflineGrace();
+        expect(result.authorized).toBe(true);
+        expect(result.source).toBe('signed_token');
+      });
     });
   });
 });
