@@ -1,6 +1,6 @@
 # D4 (online_check_token) + R1 等价性回补设计
 
-> **状态**：草案 v0.1
+> **状态**：草案 v0.2（Q-1..Q-4 决策已落定）
 > **日期**：2026-06-16
 > **作者**：lc-kendo（与 AI 协作起草）
 > **范围**：license-mgr v1.0.0-alpha.2 / beta.1 的实现规划
@@ -502,50 +502,98 @@ CI 阶段：alpha.2 之前必须 100% 通过；GA 之前作为强制 gate。
 
 ---
 
-## 7. Open questions
+## 7. Resolved questions
 
-### Q-1：PROD_TOKEN_KEY release pipeline 注入流程
+### Q-1：PROD_TOKEN_KEY release pipeline 注入流程 — **(a) tsup `define` 替换源码常量**
 
-CLI 现在的做法：`token-key.js` 含 PLACEHOLDER，release pipeline 在打包前 sed 替换。
+**决策**：build 时通过 env 注入私钥不可见的 PEM 公钥，tsup config `define` 替换源码 PLACEHOLDER 常量。
 
-license-mgr 是 NPM 包，build artifact 是 `dist/`。Pipeline 怎么注入？
+**实现规范**：
 
-**候选方案**：
-- (a) tsup build 时通过 env 注入：`PROD_TOKEN_KEY=$(cat keys/prod.pem) pnpm build`，tsup config 用 `define` 替换源码常量
-- (b) release workflow 在 build 前 sed 替换 `src/token-key.ts` 的 PLACEHOLDER
-- (c) 分离两份发布产物：`@clouditera/license-mgr`（含 PLACEHOLDER，调用方注入）+ `@clouditera/license-mgr-prod`（含真实 key）
+```typescript
+// tsup.config.ts
+import { defineConfig } from 'tsup';
 
-**待 release pipeline owner 决策**。建议 (a)，最干净，但需要在 tsup config 加 `replaceNodeEnv` 类逻辑。
+export default defineConfig({
+  entry: ['src/index.ts'],
+  format: ['esm', 'cjs'],
+  dts: true,
+  clean: true,
+  define: {
+    // Build-time replacement. Falls back to PLACEHOLDER if env is unset
+    // (dev builds, IDE). Production release pipeline MUST set this.
+    __PROD_TOKEN_KEY__: JSON.stringify(
+      process.env.PROD_TOKEN_KEY ?? '-----BEGIN PUBLIC KEY-----\nPLACEHOLDER\n-----END PUBLIC KEY-----',
+    ),
+  },
+});
+```
 
-### Q-2：`legacyTokenKeys` 构造参数是否需要
+```typescript
+// src/token-key.ts
+declare const __PROD_TOKEN_KEY__: string;
+const PROD_TOKEN_KEY: string = __PROD_TOKEN_KEY__;
+```
 
-CLI legacy 没有 legacyTokenKeys 概念（PROD_TOKEN_KEY 单一）。但 license-mgr 已经在 license payload signing 上有 `legacyKeys: string[]` 参数（与现状一致）。
+**Release pipeline 改造**（`.github/workflows/release.yml`，alpha.2 ship 前必须落地）：
+- 在 `pnpm build` 之前从 GitHub Secrets 读 `PROD_TOKEN_PUBLIC_KEY_PEM`
+- `PROD_TOKEN_KEY=$(echo "$PROD_TOKEN_PUBLIC_KEY_PEM") pnpm build`
+- Build 完后跑 smoke test：`grep -q "PLACEHOLDER" dist/index.js && exit 1`（防止 secret 注入失败但 release 通过）
 
-**对称性问题**：token key 是否也该有 legacy 兼容期？
+**为什么不选 (b) sed 替换源码**：sed 改源文件会让 dev 仓状态被污染（commit 一不小心就把真实 key 写进 git）。`define` 只在 build artifact 注入，源码永远是 PLACEHOLDER。
 
-**建议**：本期**不引入**。理由：token 是 7 天 TTL 的短期凭据，过期就重签发，不需要 legacy 公钥回退。即便未来 token key 轮换，新 client 拿到旧 token → token 过期 → 重新 /refresh → 拿到新 token。攻击面更小。
+**为什么不选 (c) 双产物**：增加发布复杂度且无对称收益——`legacyKeys` 已经允许调用方追加公钥，不需要二次包。
 
-如果 server 团队需要 token key 平滑轮换，再独立立项。
+### Q-2：`legacyTokenKeys` 构造参数 — **不引入**
 
-### Q-3：`online-check.json` 路径是否随 product line 隔离（§R9）
+**决策**：本期不引入 token key 的 legacy 兼容机制。
 
-CLI legacy 路径：`{configDir}/license/online-check.json`。
-按 §R9 决策：DevAgent 系沿用 `~/.cortexdev-pro/license/`，DevEye 系独立 configDir。
+**理由**：
+- Token 是 7 天 TTL 的短期凭据，过期就重签发
+- 新 client 拿到旧 token → token 过期 → 重新 /refresh → 拿到新 token
+- 攻击面比 license payload key 小得多（license payload key 必须支持 legacy 是因为 license 寿命跨年）
+- 未来 server 团队若真的要做 token key 平滑轮换，独立立项
 
-license-mgr 实现：`online-check-store.ts` 接受 `configDir` 参数（与 CLI legacy 一致），调用方决定路径。无需特殊处理——本来就靠 configDir 隔离。
+**与 license payload `legacyKeys` 的对称性差异**：明确文档化在 `docs/SECURITY.md`，让读者理解为什么 token-key 和 payload-key 的对称性不同。
 
-**结论**：不阻塞设计，按 CLI legacy 实现即可。
+### Q-3：`online-check.json` 路径产品线隔离 — **靠 configDir 参数即可**
 
-### Q-4：`clock_anomaly` 是否触发状态机迁移
+**决策**：不在 `online-check-store.ts` 内部做产品线判断，路径完全由 `configDir` 参数决定（与 §R9 路径策略一致）。
 
-CLI gate.js 在 `daysSince < 0` 时返回 `clock_anomaly`，但 license-mgr 状态机里没有对应状态。
+**实现规范**：
+- `readOnlineCheck(configDir)` / `writeOnlineCheck(configDir, ...)` 接受 configDir 字符串
+- 内部组装：`join(configDir, 'license', 'online-check.json')`
+- 调用方（CLI / App / DevEye 等）按各自产品线路径解析后传入
 
-**候选**：
-- (a) `clock_anomaly` 折叠进 `error` 状态
-- (b) 新增 `clock_anomaly` 状态
-- (c) `checkOfflineGrace()` 返回 `OfflineGraceResult.reason: 'clock_anomaly'`，但 LicenseService 状态保持 `validating`
+**这与 §R9 完全协同**：产品线隔离是路径层的事，store 层只是按路径读写。
 
-**建议** (c)：grace check 是辅助决策，不应污染主状态机。adapter 层根据 result 决定怎么向上层呈现。
+### Q-4：`clock_anomaly` 状态机归属 — **(c) `OfflineGraceResult.reason` 透传，不污染主状态机**
+
+**决策**：`LicenseService` 状态机（unlicensed / validating / active / expired / revoked / error）保持不变。`clock_anomaly` 仅作为 `checkOfflineGrace()` 返回值的 `reason` 字段出现。
+
+**实现规范**：
+
+```typescript
+export type OfflineGraceReason =
+  | 'offline_expired'
+  | 'clock_anomaly';
+
+export interface OfflineGraceResult {
+  authorized: boolean;
+  reason?: OfflineGraceReason;
+  daysLeft?: number;
+  lastCheck?: string;
+  tokenFailure?: 'id_mismatch' | 'expired' | 'invalid_signature';
+  source?: 'signed_token' | 'last_online_check';
+}
+```
+
+**Adapter 层职责**：
+- CLI 现状：gate.js 读到 `clock_anomaly` 后向用户显示 "本机时钟疑似回拨，请校准系统时间" 的错误
+- license-mgr 新 adapter：同样行为，但调用 `service.checkOfflineGrace()` 拿 result
+- LicenseService 在用户主流程上层依然是 `active`（如果 license payload 本身校验通过）——adapter 决定要不要把 `clock_anomaly` 当 fatal
+
+**理由**：clock anomaly 是辅助决策，不是 license 本身的状态变化。状态机里加这个值会让所有现有状态机消费方（DevAgent-App IPC layer / future DevEye）被迫处理一个跟自己无关的状态。adapter 隔离更干净。
 
 ---
 
@@ -576,7 +624,7 @@ license-mgr v1.0.0-alpha.2 发布前必须满足：
 - [ ] §3.3.2 `CORTEXDEV_LICENSE_SERVER` deprecation warning 在测试中被触发并通过断言验证
 - [ ] §3.3.2 hostname allowlist 拒绝非 allowlist host 的单元测试通过
 - [ ] §4.4 `LICENSE_REQUIRE_SIGNED_TOKEN=true` 行为单元测试通过
-- [ ] §7 Q-1 PROD_TOKEN_KEY 注入流程已落地（不能再是 PLACEHOLDER）
+- [ ] §7 Q-1 PROD_TOKEN_KEY tsup `define` 注入流程已落地（release workflow 改造 + smoke test 守护 PLACEHOLDER 不会被发布）
 - [ ] `docs/requirements.md` 同步更新 §F2 / F5 / F8 / N4 / M3
 - [ ] `CHANGELOG.md` `[1.0.0-alpha.2]` 段含 Added / Changed / Deprecated 三类
 - [ ] Issue License-Mgr#2 关闭
