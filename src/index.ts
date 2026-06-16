@@ -123,7 +123,12 @@ export type { ValidateLicenseOptions, ValidateResult } from './validator.js';
 // Online client (activate / refresh against license server)
 // ---------------------------------------------------------------------------
 
-export { onlineActivate, onlineRefresh } from './online-client.js';
+export {
+  onlineActivate,
+  onlineRefresh,
+  setOnlineClientLogger,
+  ALLOWED_LICENSE_HOSTS,
+} from './online-client.js';
 export type {
   ActivateRequest,
   ActivateResponse,

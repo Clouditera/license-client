@@ -1,17 +1,26 @@
 /**
  * HTTP client for the CortexDev Pro license API.
  *
- * Ported byte-equivalent from CortexDev-Agents/src/main/core/license/online-client.ts.
- * Changes:
- *   - `@shared/brand.CORTEXDEV_ENV_VARS` → inlined env-var name.
- *   - `@shared/result.{ok, err, Result}` → local `./result.js`.
+ * Ported byte-equivalent from CortexDev-Agents/src/main/core/license/online-client.ts
+ * with D4 + R1 hardening:
+ *   - `ALLOWED_LICENSE_HOSTS` hostname allowlist (matches CLI server-url.js
+ *     byte-equivalent) — refuses non-allowlisted hostnames so a tampered env
+ *     var cannot redirect activation to evil.attacker.com.
+ *   - Env-name compatibility: `CORTEXDEV_LICENSE_API_URL` takes precedence;
+ *     legacy `CORTEXDEV_LICENSE_SERVER` is still honoured with a deprecation
+ *     warning. Per docs/d4-design.md §4.2 Q-2=B: removal in v1.1.
+ *   - Default base URL aligns with CLI legacy `https://license.clouditera.online/api/v1`
+ *     (base contains `/api/v1`, request path uses `/activate` / `/refresh`).
+ *   - `ActivateResponse` / `RefreshResponse` carry the optional D4
+ *     `online_check_token` field.
  *
- * Endpoints:
- *   POST /api/v1/activate  — register a device when a license is first activated
- *   POST /api/v1/refresh   — check revocation status and update last_seen
+ * Endpoints (relative to base):
+ *   POST /activate  — register a device when a license is first activated
+ *   POST /refresh   — check revocation status and update last_seen
  *
- * All functions return a `Result` — they never throw. Network errors and
- * unexpected HTTP responses are folded into typed `OnlineClientError` values.
+ * All functions return a `Result` — they never throw. Network errors,
+ * allowlist refusals and unexpected HTTP responses are folded into typed
+ * `OnlineClientError` values.
  *
  * SECURITY: This module is intended to run in the host process (Electron main,
  * or a CLI). Renderer / UI processes must reach it through the host's IPC
@@ -19,16 +28,114 @@
  */
 
 import { err, ok, type Result } from './result.js';
+import type { SignedToken } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Logger injection (mirrors crypto.ts pattern — no module-level side effects)
+// ---------------------------------------------------------------------------
+
+interface OnlineClientLogger {
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+}
+
+let logger: OnlineClientLogger = { warn: () => undefined };
+
+export function setOnlineClientLogger(impl: OnlineClientLogger): void {
+  logger = impl;
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const PRODUCTION_BASE_URL = 'https://license.clouditera.online';
+/**
+ * Production base URL — includes `/api/v1` so request paths can stay short
+ * (`/activate`, `/refresh`) and match CLI legacy fetch sites byte-for-byte.
+ * Migrated from `license.cloudrouter.online` on 2026-06-14; both domains
+ * remain live during transition (CLI allowlist already covers both).
+ */
+const PRODUCTION_BASE_URL = 'https://license.clouditera.online/api/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * Domain pinning. Mirrors CLI `packages/core/src/license/server-url.js
+ * ALLOWED_LICENSE_HOSTS` so a tampered launcher / env var cannot redirect
+ * activation traffic to an attacker-controlled host. Renderer / UI hosts
+ * MUST NOT bypass this check.
+ *
+ * Keep byte-aligned with CLI; both files must agree on the production +
+ * staging hostnames.
+ */
+export const ALLOWED_LICENSE_HOSTS: ReadonlySet<string> = new Set([
+  'license.devagent.io',
+  'license.clouditera.com',
+  'license.clouditera.online',
+  'devagent-license-api.clouditera2026.workers.dev',
+  'devagent-license-api-staging.clouditera2026.workers.dev',
+  'devagent-license-api-staging.kangkangli.workers.dev',
+  // China proxy domains (license-api-cn-proxy)
+  'license.cloudrouter.online',
+  'license-staging.cloudrouter.online',
+  // Local dev
+  'localhost',
+  '127.0.0.1',
+]);
+
+/**
+ * Resolve the base URL from env vars with legacy-name compatibility.
+ *
+ * Order (high to low priority):
+ *   1. `CORTEXDEV_LICENSE_API_URL` (canonical, current)
+ *   2. `CORTEXDEV_LICENSE_SERVER`  (legacy, emits deprecation warn; removal in v1.1)
+ *   3. `PRODUCTION_BASE_URL` default
+ */
 function getBaseUrl(): string {
-  return process.env['CORTEXDEV_LICENSE_API_URL'] ?? PRODUCTION_BASE_URL;
+  const newName = process.env['CORTEXDEV_LICENSE_API_URL'];
+  if (newName) return newName;
+
+  const legacyName = process.env['CORTEXDEV_LICENSE_SERVER'];
+  if (legacyName) {
+    logger.warn(
+      'CORTEXDEV_LICENSE_SERVER is deprecated and will be removed in v1.1. Use CORTEXDEV_LICENSE_API_URL.',
+      { resolved: legacyName }
+    );
+    return legacyName;
+  }
+
+  return PRODUCTION_BASE_URL;
+}
+
+/**
+ * Enforce HTTPS + allowlist on the resolved base URL. Throws synchronously
+ * because misconfigured env vars are a startup-time configuration error, not
+ * a runtime network condition — matching CLI `resolveLicenseServerURL()`
+ * behaviour.
+ *
+ * Localhost / 127.0.0.1 are permitted over plain http for dev convenience
+ * (same exception CLI carries).
+ */
+function assertAllowedUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (e) {
+    throw new Error(
+      `[license/online-client] Invalid CORTEXDEV_LICENSE_API_URL: ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+  }
+
+  const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !(isLocal && parsed.protocol === 'http:')) {
+    throw new Error('[license/online-client] License server URL must use HTTPS protocol');
+  }
+  if (!ALLOWED_LICENSE_HOSTS.has(parsed.hostname)) {
+    throw new Error(
+      `[license/online-client] License server domain not allowed: ${parsed.hostname}`
+    );
+  }
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +187,12 @@ export interface ActivateResponse {
   status: 'activated';
   server_time: string;
   activation_id: string;
+  /**
+   * D4 server-signed offline-grace assertion. Optional because pre-D4 server
+   * builds (and signing failures within a D4-capable server) omit the field
+   * entirely. Clients store this in `online-check.json` for offline Path A.
+   */
+  online_check_token?: SignedToken;
 }
 
 export interface RefreshRequest {
@@ -94,6 +207,12 @@ export interface RefreshResponse {
   reason?: string | null;
   /** Currently always null (server does not re-sign). */
   license: null;
+  /**
+   * D4 server-signed offline-grace assertion. Server omits this on revoked
+   * responses (cf. server route refresh.js — revoked sessions must not be
+   * granted continued offline use).
+   */
+  online_check_token?: SignedToken;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,13 +230,18 @@ interface ApiErrorEnvelope {
 
 /**
  * Execute a POST request against the license API with a 10-second timeout.
- * Returns a typed Result; never throws.
+ * Returns a typed Result; never throws on network conditions. Throws ONLY on
+ * env-var misconfiguration (invalid URL / non-HTTPS / disallowed host) since
+ * those are startup-time errors that callers should surface to the user
+ * rather than silently retry.
  */
 async function post<TResponse>(
   path: string,
   body: unknown
 ): Promise<Result<TResponse, OnlineClientError>> {
-  const url = `${getBaseUrl()}${path}`;
+  const base = getBaseUrl();
+  assertAllowedUrl(base); // throws synchronously on misconfig
+  const url = `${base}${path}`;
   const controller = new AbortController();
   const timerId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -188,19 +312,20 @@ async function post<TResponse>(
 // ---------------------------------------------------------------------------
 
 /**
- * Call `POST /api/v1/activate` to register this device with the license server.
+ * Call `POST /activate` to register this device with the license server.
+ * Wire URL = `${baseUrl}/activate`; baseUrl already contains `/api/v1`.
  */
 export async function onlineActivate(
   req: ActivateRequest
 ): Promise<Result<ActivateResponse, OnlineClientError>> {
-  return post<ActivateResponse>('/api/v1/activate', req);
+  return post<ActivateResponse>('/activate', req);
 }
 
 /**
- * Call `POST /api/v1/refresh` to check for revocation and update `last_seen`.
+ * Call `POST /refresh` to check for revocation and update `last_seen`.
  */
 export async function onlineRefresh(
   req: RefreshRequest
 ): Promise<Result<RefreshResponse, OnlineClientError>> {
-  return post<RefreshResponse>('/api/v1/refresh', req);
+  return post<RefreshResponse>('/refresh', req);
 }
