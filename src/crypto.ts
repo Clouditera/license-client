@@ -30,7 +30,6 @@ import { verify } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { LicensePayload } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Host-injected dependencies (replaces electron.app and the host logger)
@@ -244,7 +243,7 @@ export function setLegacyKeyHitListener(fn: ((label: string) => void) | null): v
 // Signature verification
 // ---------------------------------------------------------------------------
 
-function verifyOnce(payload: LicensePayload, signatureBase64: string, publicKey: string): boolean {
+function verifyOnce(payload: object, signatureBase64: string, publicKey: string): boolean {
   try {
     const data = Buffer.from(JSON.stringify(canonicalize(payload)), 'utf8');
     const signature = Buffer.from(signatureBase64, 'base64');
@@ -264,7 +263,7 @@ function verifyOnce(payload: LicensePayload, signatureBase64: string, publicKey:
  * event. Dev builds never consult LEGACY_KEYS.
  */
 export function verifySignature(
-  payload: LicensePayload,
+  payload: object,
   signatureBase64: string,
   publicKey?: string
 ): boolean {

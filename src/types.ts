@@ -269,3 +269,88 @@ export interface FingerprintResult {
   /** 64-character lowercase hex SHA-256 device fingerprint. */
   fingerprint: string;
 }
+
+// ---------------------------------------------------------------------------
+// D4 — online_check_token (server-signed offline grace assertion)
+// ---------------------------------------------------------------------------
+
+/**
+ * Server-signed offline grace assertion returned by `/activate` and `/refresh`.
+ *
+ * Wire format byte-equivalent with the server's `signOnlineCheckToken()` output
+ * (devagent-cli/server/license-api/src/lib/token.js): the server computes
+ * `canonicalize(payload)` → ECDSA P-256 / SHA-256 sign → P1363→DER → base64,
+ * and the client verifies with `node:crypto verify('SHA256', ...)` against
+ * `EMBEDDED_TOKEN_PUBLIC_KEY` (token-key.ts, separate trust root from license
+ * payload signing).
+ */
+export interface SignedToken {
+  payload: {
+    /** Must match the locally-bound license's `license_id` to prevent token reuse. */
+    license_id: string;
+    /** Server-controlled ISO timestamp; mirrors the value carried by the response envelope. */
+    server_time: string;
+    /**
+     * Server-controlled ISO expiry. Defaults to `server_time + 7d` and is
+     * authoritative — any caller-injected `expires_at` is stripped before
+     * signing (see server token.js).
+     */
+    expires_at: string;
+  };
+  /** Base-64 of the DER-encoded ECDSA signature over `canonicalize(payload)`. */
+  signature: string;
+}
+
+/**
+ * Discriminated outcome of {@link verifyOnlineCheckToken}.
+ *
+ * Reasons exist independently so the offline-grace caller can distinguish
+ * "old/corrupt token file — fall through to legacy Path B" (`malformed`) from
+ * hard failures that must NOT slip past the lax legacy path:
+ *   - `id_mismatch` — token belongs to a different license_id
+ *   - `expired` — token TTL elapsed
+ *   - `invalid_signature` — tamper or wrong trust root
+ *
+ * Conflating these would let an attacker break the signature and fall back
+ * into the more permissive Path B window.
+ */
+export type OnlineCheckVerdict =
+  | { valid: true }
+  | { valid: false; reason: 'malformed' | 'id_mismatch' | 'expired' | 'invalid_signature' };
+
+/**
+ * On-disk shape of `{configDir}/license/online-check.json`.
+ *
+ * - `last_online_check` is the local wall-clock timestamp when the gate last
+ *   recorded an authorised startup. Always present after the first activate.
+ * - `server_time` is the most-recent server-issued ISO timestamp echoed back
+ *   from `/activate` or `/refresh`. Used by legacy Path B grace calculation.
+ * - `signed_token` is the optional server-signed D4 assertion. Omitted when
+ *   the server has not yet shipped the token-signing patch so the file stays
+ *   interoperable with both older and newer servers.
+ */
+export interface OnlineCheckFile {
+  last_online_check: string;
+  server_time?: string;
+  signed_token?: SignedToken;
+}
+
+/**
+ * Result of `LicenseService.checkOfflineGrace()` — mirrors the CLI legacy
+ * `gate.js: checkOfflineGrace()` return shape so adapters can map 1:1.
+ *
+ * `reason` is undefined when `authorized` is true; otherwise it carries the
+ * specific failure mode for UI/CLI presentation.
+ *
+ * `tokenFailure` is populated only when Path A's D4 token verification failed
+ * for a non-malformed reason — the caller may want to log or surface "token
+ * tampered" vs. plain "offline_expired".
+ */
+export interface OfflineGraceResult {
+  authorized: boolean;
+  reason?: 'offline_expired' | 'clock_anomaly';
+  daysLeft?: number;
+  lastCheck?: string;
+  tokenFailure?: 'id_mismatch' | 'expired' | 'invalid_signature';
+  source?: 'signed_token' | 'last_online_check';
+}

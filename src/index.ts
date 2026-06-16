@@ -31,9 +31,13 @@ export type {
   LicenseFile,
   LicensePayload,
   LicenseStatus,
+  OfflineGraceResult,
+  OnlineCheckFile,
+  OnlineCheckVerdict,
   RefreshOutcome,
   RefreshRejectionReason,
   ServerStatus,
+  SignedToken,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,12 @@ export {
   PROD_TOKEN_KEY,
   publicKeysEqual,
 } from './token-key.js';
+
+// ---------------------------------------------------------------------------
+// Online-check token verification (D4 — server-signed offline grace)
+// ---------------------------------------------------------------------------
+
+export { verifyOnlineCheckToken } from './online-check.js';
 
 // ---------------------------------------------------------------------------
 // Crypto (signature verification + key resolution)
