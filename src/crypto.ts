@@ -169,7 +169,7 @@ co+Zl+cp5mMRPZgwD5+0Q8xzCkrb2k6UvEMsDR5ccGdrAzoRHl9Xx4RR6A==
 // Build mode
 // ---------------------------------------------------------------------------
 
-function isProductionBuild(): boolean {
+export function isProductionBuild(): boolean {
   return productionBuildResolver();
 }
 

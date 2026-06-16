@@ -26,6 +26,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run ci
+      - name: Verify token trust-root isolation (release gate)
+        # Re-run trust-root verification at release time so a stale tag pushed
+        # before a fresh main-branch CI run still gets blocked.
+        run: node scripts/verify-trust-root.mjs
       - run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

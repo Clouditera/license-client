@@ -28,3 +28,9 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+
+# Secrets — token-keys/ holds generated PROD token keypairs during rotation.
+# The private half MUST never be committed; the public half is meant to be
+# pasted into src/token-key.ts and then this directory can be wiped.
+token-keys/
+*.pem

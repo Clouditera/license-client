@@ -33,3 +33,12 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run test
       - run: pnpm run build
+      - name: Verify token trust-root isolation
+        # Defence-in-depth gate covering two trust-root downgrade modes:
+        #   - PROD_TOKEN_KEY left as PLACEHOLDER (would ship a worthless key)
+        #   - PROD_TOKEN_KEY == DEV_TOKEN_KEY (would trust the public dev
+        #     private half — D4 revocation bypass)
+        #   - PROD_TOKEN_KEY == license PROD_KEY (collapses the two trust
+        #     roots designed to fail independently)
+        # Same check runs in release.yml before publish for double coverage.
+        run: node scripts/verify-trust-root.mjs

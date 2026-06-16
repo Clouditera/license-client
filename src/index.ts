@@ -44,12 +44,24 @@ export { isExpired, isExpiredWithServerTime, validatePayload } from './schema.js
 export type { ValidationResult } from './schema.js';
 
 // ---------------------------------------------------------------------------
+// Token key (D4 trust root for online_check_token verification)
+// ---------------------------------------------------------------------------
+
+export {
+  DEV_TOKEN_KEY,
+  EMBEDDED_TOKEN_PUBLIC_KEY,
+  PROD_TOKEN_KEY,
+  publicKeysEqual,
+} from './token-key.js';
+
+// ---------------------------------------------------------------------------
 // Crypto (signature verification + key resolution)
 // ---------------------------------------------------------------------------
 
 export {
   canonicalize,
   getPublicKey,
+  isProductionBuild,
   LEGACY_KEY_SUNSET,
   setLegacyKeyHitListener,
   setLogger,
