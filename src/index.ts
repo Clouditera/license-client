@@ -150,4 +150,4 @@ export {
 } from './license-service.js';
 export type { BinaryDownloadHooks, HostEnvironment, ServiceLogger } from './license-service.js';
 
-export const VERSION = '1.0.0-alpha.0';
+export const VERSION = '1.0.0-alpha.2';

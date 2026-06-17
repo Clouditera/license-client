@@ -1,6 +1,6 @@
 # License 管理独立模块 需求文档
 
-> **状态**：草案 v0.6
+> **状态**：草案 v0.7（D4 + R1 等价性回补已实现于 v1.0.0-alpha.2）
 > **日期**：2026-06-09
 > **作者**：lc-kendo（与 AI 协作起草）
 > **范围**：原样抽取现有 License 能力为独立模块，**行为不变、形态独立**
@@ -261,7 +261,9 @@ Phase 8: 其他演进（不在本文档范围）
 7. 过期: max(serverTime, localTime) ≥ expires_at
 ```
 
-**不增加步骤**（无 `product_codes` 校验）。
+**不增加步骤**（无 `product_codes` 校验，无 D4 步）。
+
+**D4 决策点不在 validator**：v1.0.0-alpha.2 引入的 D4 `online_check_token` 校验由 `LicenseService.checkOfflineGrace()` 在 state 层承载，与 7 步 validator 解耦，详见 §F1.2 与 `docs/d4-design.md` §3.1。
 
 ### F3. 全量复刻现有 crypto
 
@@ -300,9 +302,9 @@ Phase 8: 其他演进（不在本文档范围）
 
 完整保留：
 
-- **URL**：`https://license.clouditera.online`（生产）
-- 环境变量覆盖：`CORTEXDEV_LICENSE_API_URL`
-- 端点：`POST /api/v1/activate` 与 `POST /api/v1/refresh`
+- **URL**：`https://license.clouditera.online/api/v1`（生产；base 含 `/api/v1`，与 CLI legacy 字节对齐）
+- 环境变量覆盖：`CORTEXDEV_LICENSE_API_URL`（canonical）+ `CORTEXDEV_LICENSE_SERVER`（legacy，**v1.0.x 双名兼容 + warn，v1.1 移除** — 详见 d4-design §4.2）
+- 端点（base 之下相对路径）：`POST /activate` 与 `POST /refresh`
 - 请求/响应 schema（与现状字节一致）
 - 错误码映射：
   - HTTP 409 `DEVICE_LIMIT_EXCEEDED` → `device_limit_exceeded`
@@ -312,6 +314,13 @@ Phase 8: 其他演进（不在本文档范围）
   - 网络/超时 → `network_error`
 - 10 秒超时
 - 永不抛异常，全部 `Result` 包装
+
+**v1.0.0-alpha.2 新增（R1 等价性回补）**：
+
+- `ALLOWED_LICENSE_HOSTS` 域名 allowlist（与 CLI `server-url.js` 字节对齐）。post() 内部 assert，非 allowlist host 在 fetch 之前同步 throw（misconfig 是启动时错误，不是运行时错误）。
+- HTTPS 强制；localhost / 127.0.0.1 例外允许 http。
+- `ActivateResponse` / `RefreshResponse` 加可选字段 `online_check_token?: SignedToken`（D4 — server 签发的离线宽限期凭据）；server omit 时 client 不报错（向后兼容 pre-D4 server）。
+- `setOnlineClientLogger()` 注入 logger，供 deprecation warn 走宿主日志。
 
 ### F6. 全量复刻现有 store
 
@@ -348,6 +357,13 @@ export type Result<T, E> =
 export function ok<T>(data: T): Result<T, never>;
 export function err<E>(error: E): Result<never, E>;
 ```
+
+**v1.0.0-alpha.2 新增（D4）**：
+
+- `SignedToken` — D4 `online_check_token` 线协议形态（`{ payload: { license_id, server_time, expires_at }, signature }`）
+- `OnlineCheckVerdict` — `verifyOnlineCheckToken` 4 verdict 判别联合（`valid` / `malformed` / `id_mismatch` / `expired` / `invalid_signature`）
+- `OnlineCheckFile` — `online-check.json` 磁盘 schema
+- `OfflineGraceResult` — `LicenseService.checkOfflineGrace()` 返回结构（含 `authorized`、`reason`、`daysLeft`、`tokenFailure`、`source` 等）
 
 ### F9. IPC controller（DevAgent-App 侧适配）
 
@@ -401,6 +417,15 @@ CLI 没有 IPC 概念，直接调用 `LicenseService` API。
 - 路径校验：configDir 必须绝对路径，禁止 `..` 穿越
 - 文件权限：写入 license 后 `0600`（与现状一致）
 - 依赖审计：CI 集成 `npm audit`，0 高危依赖
+
+**v1.0.0-alpha.2 D4 trust-root 隔离（5 件套）**：
+
+- **独立信任根**：`PROD_TOKEN_KEY`（D4 token 验签）与 `PROD_KEY`（license payload 验签）物理隔离，私钥分别在 Workers Secret 的 `TOKEN_SIGNING_PRIVATE_KEY` 与 license 签发管线中，互不污染。
+- **运行时防御**：`token-key.ts: loadEmbeddedTokenPublicKey()` 在 prod build 启动时检查 PLACEHOLDER + `publicKeysEqual(PROD_TOKEN_KEY, DEV_TOKEN_KEY)`，命中则 FATAL throw。
+- **`publicKeysEqual()` DER 比较**：用 SPKI DER 字节比较而非 PEM 文本，防 PEM 重新格式化绕过 collision guard。
+- **CI gate `Verify token trust-root isolation`**：`scripts/verify-trust-root.mjs` 两层断言（文本 PLACEHOLDER 检测 + DER 比较 `PROD_TOKEN_KEY ≢ DEV_TOKEN_KEY` 且 `PROD_TOKEN_KEY ≢ PROD_KEY`），在 ci.yml + release.yml 双层执行。
+- **轮换工具**：`scripts/gen-prod-token-key.mjs` 生成 ECDSA P-256 keypair，private 0600 + `.gitignore` 守护 `token-keys/`，SOP 见生成时控制台输出。
+- **域名 allowlist**：`online-client.ts: ALLOWED_LICENSE_HOSTS` 拒绝非授权 host，防止 env 篡改把激活流量引到 evil.attacker.com。
 
 ### N5. 测试
 
@@ -540,11 +565,15 @@ import type {
 - 不引入 v1/v2 双算法 API
 - 历史 license 全部兼容
 
-### M3. HTTP 契约：**完全不变**
+### M3. HTTP 契约：**线协议字节不变（base + path 拆分有调整）**
 
-- URL：`https://license.clouditera.online`
-- 端点路径、请求/响应、错误码、超时全部维持
-- 签发端（`devagent-cli` 仓库内）**无需任何改造**
+- **Wire URL**：`https://license.clouditera.online/api/v1/{activate,refresh}`（与 alpha.1 / CLI legacy 字节一致）
+- v1.0.0-alpha.2 内部把 base URL（含 `/api/v1`）与 path（`/activate` / `/refresh`）拆分，**对外 wire 请求无变化**——CLI 用户把 `DEVAGENT_LICENSE_SERVER=.../api/v1` 直接抄成 `CORTEXDEV_LICENSE_API_URL` 不会产生 `/api/v1/api/v1` 双拼问题。
+- 请求/响应 schema：**完全不变**，加可选 `online_check_token` 字段（D4，详见 §F5）。pre-D4 server 不带该字段，client 静默兼容。
+- 错误码、超时全部维持。
+- 签发端（`devagent-cli` 仓库内）**无需任何改造**——D4 server 已就绪（`server/license-api/`），本期是 client 半边补齐。
+
+**域名 allowlist**：v1.0.0-alpha.2 起，`CORTEXDEV_LICENSE_API_URL` 必须指向 `ALLOWED_LICENSE_HOSTS` 内的 host，否则 client 同步 throw（§N4 安全增强）。
 
 ### M4. DevAgent-App IPC：**完全不变**
 

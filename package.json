@@ -1,6 +1,6 @@
 {
   "name": "@clouditera/license-mgr",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "description": "Standalone license management module for DevAgent-App, DevAgent-CLI, DevEye, DevEyeProd and future products",
   "license": "UNLICENSED",
   "private": true,
