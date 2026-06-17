@@ -223,9 +223,51 @@ interface ApiSuccessEnvelope<T> {
   data: T;
 }
 
-interface ApiErrorEnvelope {
-  error: string;
+/**
+ * Current server error envelope (Cloudflare Worker, alpha.2+):
+ *
+ *   { "ok": false, "error": { "code": "BAD_REQUEST", "message": "..." } }
+ *
+ * Older deployments / shim layers historically returned the flat shape
+ *
+ *   { "error": "BAD_REQUEST", "message": "..." }
+ *
+ * `normalizeErrorEnvelope` accepts both so a server-side rollback (or a
+ * proxy that doesn't preserve nesting) cannot wedge the client into a
+ * "no error code at all" state.
+ *
+ * Without this normalisation step the code path `errorBody.error === '...'`
+ * compares a string against an object, returns false silently, and the
+ * `device_limit_exceeded` / `license_revoked` branches NEVER fire — every
+ * 409 / 403 collapses into the generic `api_error` variant. See License-Mgr#1.
+ */
+interface NormalizedErrorEnvelope {
+  code: string;
   message: string;
+}
+
+function normalizeErrorEnvelope(raw: unknown): NormalizedErrorEnvelope {
+  if (raw !== null && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+
+    // Shape A (current): { ok: false, error: { code, message } }
+    if (obj['error'] !== null && typeof obj['error'] === 'object' && !Array.isArray(obj['error'])) {
+      const inner = obj['error'] as Record<string, unknown>;
+      const code = typeof inner['code'] === 'string' ? inner['code'] : 'UNKNOWN';
+      const message = typeof inner['message'] === 'string' ? inner['message'] : 'Unknown error';
+      return { code, message };
+    }
+
+    // Shape B (legacy): { error: 'CODE', message: '...' }
+    if (typeof obj['error'] === 'string') {
+      return {
+        code: obj['error'],
+        message: typeof obj['message'] === 'string' ? obj['message'] : 'Unknown error',
+      };
+    }
+  }
+
+  return { code: 'UNKNOWN', message: 'Unknown error' };
 }
 
 /**
@@ -275,17 +317,17 @@ async function post<TResponse>(
       }
     }
 
-    let errorBody: ApiErrorEnvelope = { error: 'UNKNOWN', message: 'Unknown error' };
+    let errorBody: NormalizedErrorEnvelope = { code: 'UNKNOWN', message: 'Unknown error' };
     try {
-      errorBody = (await response.json()) as ApiErrorEnvelope;
+      errorBody = normalizeErrorEnvelope(await response.json());
     } catch {
       // ignore parse failure
     }
 
-    if (response.status === 409 && errorBody.error === 'DEVICE_LIMIT_EXCEEDED') {
+    if (response.status === 409 && errorBody.code === 'DEVICE_LIMIT_EXCEEDED') {
       return err({ type: 'device_limit_exceeded' } as const);
     }
-    if (response.status === 403 && errorBody.error === 'LICENSE_REVOKED') {
+    if (response.status === 403 && errorBody.code === 'LICENSE_REVOKED') {
       return err({ type: 'license_revoked' } as const);
     }
     if (response.status === 404) {
@@ -295,7 +337,7 @@ async function post<TResponse>(
     return err({
       type: 'api_error',
       status: response.status,
-      code: errorBody.error,
+      code: errorBody.code,
       message: errorBody.message,
     } as const);
   } catch (e) {

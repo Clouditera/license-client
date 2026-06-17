@@ -28,7 +28,33 @@ function mockFetchOk(body: unknown, status = 200): typeof fetch {
   } as unknown as Response) as unknown as typeof fetch;
 }
 
+/**
+ * Mocks the current Cloudflare Worker error envelope:
+ *
+ *   { ok: false, error: { code, message } }
+ *
+ * Use this for any test that exercises 4xx / 5xx behaviour against the
+ * production server contract (every test in this file unless explicitly
+ * proving back-compat with the legacy envelope).
+ */
 function mockFetchError(status: number, code: string, message: string): typeof fetch {
+  return vi.fn().mockResolvedValue({
+    ok: false,
+    status,
+    json: () => Promise.resolve({ ok: false, error: { code, message } }),
+  } as unknown as Response) as unknown as typeof fetch;
+}
+
+/**
+ * Mocks the legacy flat error envelope:
+ *
+ *   { error: 'CODE', message: '...' }
+ *
+ * Kept so we can prove the normaliseEnvelope back-compat path still maps
+ * 409 DEVICE_LIMIT_EXCEEDED → device_limit_exceeded etc. even if the
+ * Worker is reverted to an older response shape.
+ */
+function mockFetchErrorLegacyEnvelope(status: number, code: string, message: string): typeof fetch {
   return vi.fn().mockResolvedValue({
     ok: false,
     status,
@@ -707,6 +733,127 @@ describe('D4 online_check_token field carry', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.online_check_token).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error envelope normalisation (License-Mgr#1 regression suite)
+// ---------------------------------------------------------------------------
+//
+// Before the alpha.4 fix, ApiErrorEnvelope expected `{ error: STRING, message }`
+// but the Cloudflare Worker had already moved to `{ ok: false, error: { code,
+// message } }`. The string === object comparison silently always returned
+// false, so 409 DEVICE_LIMIT_EXCEEDED and 403 LICENSE_REVOKED collapsed
+// into the generic api_error variant. Surface tests above already exercise
+// the current shape; the cases below pin the back-compat path so a server
+// rollback to the legacy envelope still maps to the correct variants.
+
+describe('error envelope normalisation — legacy { error: STRING, message } back-compat', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('legacy envelope: 409 still maps to device_limit_exceeded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetchErrorLegacyEnvelope(409, 'DEVICE_LIMIT_EXCEEDED', 'Device limit of 1 reached')
+    );
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.type).toBe('device_limit_exceeded');
+    }
+  });
+
+  it('legacy envelope: 403 still maps to license_revoked', async () => {
+    vi.stubGlobal('fetch', mockFetchErrorLegacyEnvelope(403, 'LICENSE_REVOKED', 'License revoked'));
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.type).toBe('license_revoked');
+    }
+  });
+
+  it('legacy envelope: unknown 5xx surfaces code + message under api_error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetchErrorLegacyEnvelope(503, 'BACKEND_DOWN', 'Upstream unavailable')
+    );
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success && result.error.type === 'api_error') {
+      expect(result.error.code).toBe('BACKEND_DOWN');
+      expect(result.error.message).toBe('Upstream unavailable');
+      expect(result.error.status).toBe(503);
+    }
+  });
+
+  it('current envelope: unknown 5xx surfaces nested code + message under api_error', async () => {
+    vi.stubGlobal('fetch', mockFetchError(503, 'BACKEND_DOWN', 'Upstream unavailable'));
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success && result.error.type === 'api_error') {
+      expect(result.error.code).toBe('BACKEND_DOWN');
+      expect(result.error.message).toBe('Upstream unavailable');
+      expect(result.error.status).toBe(503);
+    }
+  });
+
+  it('completely malformed body falls back to UNKNOWN / Unknown error (never throws)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.resolve('not an error envelope at all'),
+      } as unknown as Response) as unknown as typeof fetch
+    );
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success && result.error.type === 'api_error') {
+      expect(result.error.code).toBe('UNKNOWN');
+      expect(result.error.message).toBe('Unknown error');
+    }
+  });
+
+  it('non-object body (null) falls back to UNKNOWN', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.resolve(null),
+      } as unknown as Response) as unknown as typeof fetch
+    );
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success && result.error.type === 'api_error') {
+      expect(result.error.code).toBe('UNKNOWN');
+    }
+  });
+
+  it('current envelope with missing inner code falls back to UNKNOWN code (not crash)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ ok: false, error: { message: 'no code field' } }),
+      } as unknown as Response) as unknown as typeof fetch
+    );
+
+    const result = await onlineActivate(ACTIVATE_REQ);
+    expect(result.success).toBe(false);
+    if (!result.success && result.error.type === 'api_error') {
+      expect(result.error.code).toBe('UNKNOWN');
+      expect(result.error.message).toBe('no code field');
     }
   });
 });

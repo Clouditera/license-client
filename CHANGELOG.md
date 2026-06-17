@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.4] - 2026-06-17
+
+GA-blocker bug fix. The `device_limit_exceeded` and `license_revoked`
+error branches in `online-client.post()` have been silently dead since
+alpha.0 — they compared a string against a server payload that has long
+been an object. Every 409 / 403 from the production Cloudflare Worker
+was collapsing into the generic `api_error` variant, hiding the user-
+facing "this license is bound to too many devices" / "this license was
+revoked" messages behind a vague "server returned 409".
+
+Closes License-Mgr#1. No client-visible change for activate/refresh
+*success* paths; this only restores the correct typed error variants.
+
+### Fixed
+
+- `online-client.ts: ApiErrorEnvelope` rewritten to accept the current
+  Cloudflare Worker envelope `{ ok: false, error: { code, message } }`
+  AND tolerate the legacy flat shape `{ error: "CODE", message }` so a
+  server rollback can't silently re-break the client. The 409 →
+  `device_limit_exceeded` and 403 → `license_revoked` discriminated
+  variants now actually fire under the production server contract.
+  (License-Mgr#1)
+
+### Changed
+
+- `online-client.ts` introduces `normalizeErrorEnvelope(raw)` which
+  produces a `NormalizedErrorEnvelope { code, message }` regardless of
+  which envelope shape the server returned. `post()` reads
+  `errorBody.code` for the variant dispatch; the public `OnlineClientError`
+  union (and `api_error.code` / `api_error.message`) is unchanged so
+  downstream consumers are not affected.
+
 ## [1.0.0-alpha.3] - 2026-06-17
 
 Phase 3 unblock release. Lands the `HostEnvironment.refreshIntervalMs` and
