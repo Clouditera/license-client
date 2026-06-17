@@ -1339,4 +1339,143 @@ describe('LicenseService', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Refresh schedule injection (HostEnvironment.refreshIntervalMs +
+  // refreshStartupBudgetMs) — alpha.3 Phase 3 B1
+  // -------------------------------------------------------------------------
+  describe('refresh schedule injection (HostEnvironment.refreshIntervalMs / refreshStartupBudgetMs)', () => {
+    const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    const CLI_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000;
+
+    afterEach(() => {
+      // Reset hostEnv after each case so the override does not leak.
+      setHostEnvironment({
+        isPackaged: () => isPackagedValue,
+        getUserDataDir: () => '/fake/userData',
+      });
+      vi.useRealTimers();
+    });
+
+    it('default: scheduleNextRefresh fires after 24h when refreshIntervalMs is undefined', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-17T00:00:00Z'));
+
+      const refreshSpy = vi.mocked(onlineMock.onlineRefresh);
+      vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+      vi.mocked(storeMock.readActivationMeta).mockReturnValue(makeActivationMeta());
+
+      const svc = new LicenseService();
+      // Trigger one successful refresh which schedules the next via the
+      // steady-state interval. doRefreshNow returns after the success
+      // handler completes, so the timer is set when we proceed.
+      await svc.doRefreshNow();
+      refreshSpy.mockClear();
+
+      // Advance just under default interval — must NOT fire yet.
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS - 1000);
+      expect(refreshSpy).not.toHaveBeenCalled();
+
+      // Advance past it — fires.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(refreshSpy).toHaveBeenCalledOnce();
+
+      svc.dispose();
+    });
+
+    it('honours hostEnv.refreshIntervalMs override (CLI passes 3 days)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-17T00:00:00Z'));
+      setHostEnvironment({
+        isPackaged: () => false,
+        getUserDataDir: () => '/fake/userData',
+        refreshIntervalMs: CLI_INTERVAL_MS,
+      });
+
+      const refreshSpy = vi.mocked(onlineMock.onlineRefresh);
+      vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+      vi.mocked(storeMock.readActivationMeta).mockReturnValue(makeActivationMeta());
+
+      const svc = new LicenseService();
+      await svc.doRefreshNow();
+      refreshSpy.mockClear();
+
+      // After the default 24h, the CLI-overridden timer must NOT have fired.
+      await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS + 60_000);
+      expect(refreshSpy).not.toHaveBeenCalled();
+
+      // Past the full 3-day interval — fires.
+      await vi.advanceTimersByTimeAsync(CLI_INTERVAL_MS - DEFAULT_INTERVAL_MS);
+      expect(refreshSpy).toHaveBeenCalledOnce();
+
+      svc.dispose();
+    });
+
+    it('refreshStartupBudgetMs aborts a slow startup refresh, falls back to offline grace', async () => {
+      // Configure a 100ms budget and an onlineRefresh that hangs forever.
+      // The budget timer should win the race and route through the
+      // network_error code path.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-17T00:00:00Z'));
+      setPackaged(true);
+      setHostEnvironment({
+        isPackaged: () => true,
+        getUserDataDir: () => '/fake/userData',
+        refreshStartupBudgetMs: 100,
+      });
+
+      const refreshSpy = vi.mocked(onlineMock.onlineRefresh);
+      refreshSpy.mockReset();
+      refreshSpy.mockReturnValue(new Promise(() => undefined)); // hang forever
+
+      vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+      const recentMeta = makeActivationMeta({
+        last_verified_at: new Date('2026-06-17T00:00:00Z').toISOString(),
+      });
+      vi.mocked(storeMock.readActivationMeta).mockReturnValue(recentMeta);
+
+      const svc = new LicenseService();
+      // Activate triggers startup refresh (immediate path). Advance through
+      // the budget so the race resolves to network_error.
+      await svc.activate(JSON.stringify(makeLicenseFile()));
+      await vi.advanceTimersByTimeAsync(150);
+
+      // The hung fetch should NOT have completed but the budget should have
+      // produced a network_error — no success-path side effects (no refresh
+      // writeActivationMeta after the activate one, no refresh writeOnlineCheck).
+      expect(refreshSpy).toHaveBeenCalledOnce();
+      expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledTimes(1); // activate only
+      expect(svc.getStatus().state).toBe('active');
+
+      svc.dispose();
+      setPackaged(false);
+    });
+
+    it('no startup budget when refreshStartupBudgetMs is undefined (alpha.2 behaviour preserved)', async () => {
+      // Same hang scenario as above but without the budget — the refresh
+      // remains pending and no network_error is produced.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-17T00:00:00Z'));
+      setPackaged(true);
+
+      const refreshSpy = vi.mocked(onlineMock.onlineRefresh);
+      refreshSpy.mockReset();
+      refreshSpy.mockReturnValue(new Promise(() => undefined));
+
+      vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+      vi.mocked(storeMock.readActivationMeta).mockReturnValue(makeActivationMeta());
+
+      const svc = new LicenseService();
+      await svc.activate(JSON.stringify(makeLicenseFile()));
+      // Advance through what would have been the budget window plus a margin.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // The fetch was kicked off but never completed; no second refresh got
+      // a chance to fire because the first one is still pending forever.
+      expect(refreshSpy).toHaveBeenCalledOnce();
+
+      svc.dispose();
+      setPackaged(false);
+    });
+  });
 });

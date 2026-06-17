@@ -114,10 +114,20 @@ license-mgr `validateLicense` 跑 7 步（多 `issued_at - 60s` 防回拨 + `las
 **影响**：alpha.2 比 CLI 高频。这不是 R1 等价问题（CLI legacy 自己也用了不同时间常量给 App 和 CLI），但 24h 对 CLI 用户来说**过多** — server 端会看到 3x 流量。
 
 **处理选项**：
-- (A) license-mgr 加 `HostEnvironment.refreshIntervalMs?: number` 注入点，CLI 传 `3 * 24 * 60 * 60 * 1000`。**推荐**——已经有 `offlineGraceDays` 注入先例，一致。
-- (B) CLI adapter 内部 bypass LicenseService schedule，自己 setTimeout 调 `licenseService.doRefreshNow()`。**不推荐**——schedule 是 LicenseService 状态机的一部分。
+- (A) license-mgr 加 `HostEnvironment.refreshIntervalMs?: number` 注入点，CLI 传 `3 * 24 * 60 * 60 * 1000`。**已落地于 v1.0.0-alpha.3**——同时加了 `refreshStartupBudgetMs?: number`（CLI 传 5000，匹配 `STARTUP_BUDGET_MS`）。
+- (B) ~~CLI adapter 内部 bypass LicenseService schedule，自己 setTimeout 调 `licenseService.doRefreshNow()`。~~ 已否决——schedule 是 LicenseService 状态机的一部分。
 
-**Phase 3 ship 前**：开 license-mgr issue 增加 `refreshIntervalMs` + `refreshStartupBudgetMs` HostEnvironment 字段（v1.0.0-alpha.3 或 beta.1）。
+CLI bootstrap 现在写成：
+
+```js
+setHostEnvironment({
+  isPackaged: () => isProductionBuild(),
+  offlineGraceDays: 60,
+  requireSignedToken: process.env.LICENSE_REQUIRE_SIGNED_TOKEN === 'true',
+  refreshIntervalMs: 3 * 24 * 60 * 60 * 1000,
+  refreshStartupBudgetMs: 5000,
+});
+```
 
 ### 3.3 `updateOnlineCheckTimestamp` 没有直接对应
 
@@ -178,12 +188,12 @@ CLI 现在的埋点（如果有）需要补对照：
 
 ship Phase 3 前必须解决：
 
-| # | 项 | 解决方 | 风险 |
-|---|---|---|---|
-| B1 | `refreshIntervalMs` HostEnvironment 注入点（§3.2） | license-mgr v1.0.0-alpha.3 | 中 — 不解决 CLI 流量翻 3x |
-| B2 | `updateOnlineCheckTimestamp` shim 决策（§3.3） | CLI adapter 内部实现 | 低 — 用 store primitive 就够 |
-| B3 | GitHub Actions billing 问题（alpha.2 release workflow 没跑） | 账户层 | 低 — 本地 ci 全绿，发布只是 npm packages 推不上 |
-| B4 | CLI 仓库 dogfood 用户名单 + dogfood 周期 | 团队对齐 | — |
+| # | 项 | 解决方 | 风险 | 状态 |
+|---|---|---|---|---|
+| B1 | `refreshIntervalMs` / `refreshStartupBudgetMs` HostEnvironment 注入点（§3.2） | license-mgr v1.0.0-alpha.3 | 中 — 不解决 CLI 流量翻 3x | ✅ **解决于 [v1.0.0-alpha.3](https://github.com/Clouditera/License-Mgr/releases/tag/v1.0.0-alpha.3) / License-Mgr#3** |
+| B2 | `updateOnlineCheckTimestamp` shim 决策（§3.3） | CLI adapter 内部实现 | 低 — 用 store primitive 就够 | 待 CLI 实施时定 |
+| B3 | GitHub Actions billing 问题（alpha.2 release workflow 没跑） | 账户层 | 低 — 本地 ci 全绿，发布只是 npm packages 推不上 | 待账户处理 |
+| B4 | CLI 仓库 dogfood 用户名单 + dogfood 周期 | 团队对齐 | — | 待 |
 
 建议：
 - B1 立刻在 license-mgr 开 issue + 1-2 天内 ship alpha.3

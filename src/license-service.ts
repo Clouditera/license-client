@@ -112,6 +112,26 @@ export interface HostEnvironment {
    * (where unsigned grace is unacceptable) flip this on.
    */
   requireSignedToken?: boolean;
+  /**
+   * Override the steady-state refresh interval (ms) between successful
+   * `/refresh` calls. Default `REFRESH_INTERVAL_MS` (24h) preserves
+   * license-mgr / DevAgent-App behaviour. CLI adapter passes
+   * `3 * 24 * 60 * 60 * 1000` to match its legacy 3-day cadence.
+   *
+   * Failure-path retries (REFRESH_RETRY_MS = 30min backoff) are NOT
+   * controlled by this field — that's a backoff, not a steady cadence.
+   */
+  refreshIntervalMs?: number;
+  /**
+   * Wall-clock budget (ms) for the `initialize()` startup refresh path.
+   * When set + exceeded, the startup refresh aborts and falls back to
+   * offline grace, matching CLI `refresh.js: STARTUP_BUDGET_MS = 5000`.
+   * Default `undefined` = unlimited (current license-mgr behaviour).
+   *
+   * Only the initial startup refresh consults this budget; subsequent
+   * periodic refreshes use the steady-state interval without a budget.
+   */
+  refreshStartupBudgetMs?: number;
 }
 
 let hostEnv: HostEnvironment = {
@@ -541,9 +561,9 @@ export class LicenseService {
   private _scheduleRefresh(immediate: boolean): void {
     if (immediate) {
       this._clearRefreshTimer();
-      void this._doRefresh();
+      void this._doRefresh({ startup: true });
     } else {
-      this._scheduleNextRefresh(REFRESH_INTERVAL_MS);
+      this._scheduleNextRefresh(hostEnv.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
     }
   }
 
@@ -552,7 +572,7 @@ export class LicenseService {
     this._refreshTimer = setTimeout(() => void this._doRefresh(), delayMs);
   }
 
-  private async _doRefresh(): Promise<RefreshOutcome> {
+  private async _doRefresh(opts: { startup?: boolean } = {}): Promise<RefreshOutcome> {
     this._clearRefreshTimer();
     let meta: ActivationMeta | null = null;
     let licenseFile: LicenseFile | null = null;
@@ -568,10 +588,32 @@ export class LicenseService {
         return { kind: 'network_error' };
       }
 
-      const result = await onlineRefresh({
+      const refreshPromise = onlineRefresh({
         license_id: licenseFile.payload.license_id,
         activation_id: meta.activation_id,
       });
+
+      // Startup budget — when the host opts in (CLI does, App does not),
+      // race the network call against a wall-clock timer. Crossing the
+      // budget falls back to offline grace so a slow license server cannot
+      // block process startup.
+      const budgetMs = opts.startup ? hostEnv.refreshStartupBudgetMs : undefined;
+      const result =
+        budgetMs !== undefined
+          ? await Promise.race([
+              refreshPromise,
+              new Promise<{ success: false; error: { type: 'network_error' } }>((resolve) => {
+                setTimeout(
+                  () =>
+                    resolve({
+                      success: false,
+                      error: { type: 'network_error' },
+                    }),
+                  budgetMs
+                );
+              }),
+            ])
+          : await refreshPromise;
 
       return result.success
         ? await this._handleRefreshSuccess(result.data, meta, licenseFile)
@@ -650,7 +692,7 @@ export class LicenseService {
     writeOnlineCheck(this.configDir, refreshData.server_time, refreshData.online_check_token);
 
     await this._applyRefreshNotRevoked(licenseFile, meta, now);
-    this._scheduleNextRefresh(REFRESH_INTERVAL_MS);
+    this._scheduleNextRefresh(hostEnv.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
     return { kind: 'ok' };
   }
 

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.3] - 2026-06-17
+
+Phase 3 unblock release. Lands the `HostEnvironment.refreshIntervalMs` and
+`HostEnvironment.refreshStartupBudgetMs` injection points the CLI adapter
+needs to preserve its 3-day refresh cadence + 5-second startup budget on
+top of `@clouditera/license-mgr`. Without these, the CLI flipping its
+default to license-mgr would 3x server traffic and risk slow startup on
+degraded networks. Closes License-Mgr#3.
+
+Wire URL unchanged. Default behaviour preserved when fields are unset
+(REFRESH_INTERVAL_MS = 24h, no budget) — DevAgent-App sees no change.
+
+### Added
+
+- `HostEnvironment.refreshIntervalMs?: number` — adapter-injected override
+  for the steady-state interval between `/refresh` calls. CLI adapter
+  passes `3 * 24 * 60 * 60 * 1000`. Defaults to `REFRESH_INTERVAL_MS` (24h).
+- `HostEnvironment.refreshStartupBudgetMs?: number` — wall-clock budget
+  for the `initialize()` startup refresh. When set + exceeded, the refresh
+  aborts and the gate falls back to offline grace. Matches CLI
+  `refresh.js: STARTUP_BUDGET_MS = 5000`. Defaults to unlimited.
+
+### Changed
+
+- `LicenseService._doRefresh(opts)` now takes an optional `{ startup?: boolean }`
+  flag. When `startup: true` AND `hostEnv.refreshStartupBudgetMs` is set,
+  the network call races a budget timer; the budget wins → `network_error`
+  → offline grace. Non-startup refreshes ignore the budget entirely.
+  Internal API; not part of the public surface.
+
 ## [1.0.0-alpha.2] - 2026-06-17
 
 D4 (`online_check_token`) + R1 byte-equivalence catch-up against CLI legacy.
