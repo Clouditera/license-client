@@ -109,6 +109,88 @@ export interface ActivationMeta {
    * revocation state after an app restart without requiring a network call.
    */
   server_status?: ServerStatus;
+  /**
+   * ISO-8601 timestamp of the last successful /refresh round-trip. Drives the
+   * steady-state refresh cadence in callers that schedule their own timers
+   * (CLI gate). Distinct from `last_verified_at` which tracks any successful
+   * validation (including offline).
+   */
+  last_refresh?: string;
+  /**
+   * Fully-resolved license server URL that issued this activation.
+   *
+   * Used by `initialize()` to detect cross-environment misuse (`server_mismatch`)
+   * — if the env now resolves to a different host, calling `/refresh` would
+   * pollute the wrong KV store with this license's traffic. Adapters populate
+   * this on first online activation; legacy v1 records without the field skip
+   * the check (back-fillable via separate migration).
+   */
+  issued_server?: string;
+  /**
+   * Schema version of this activation record. Absent / 1 = legacy; 2 carries
+   * `issued_server` reliably. Adapters writing fresh records set this to 2 so
+   * the gate can rely on the field.
+   */
+  schema_version?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Fatal refresh record (last-fatal.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * On-disk shape of `{configDir}/license/last-fatal.json` — the persistent
+ * record of the most recent authoritative server reject (HTTP 404 / 4xx /
+ * payload integrity failure).
+ *
+ * Mirrors the CLI legacy `gate.js: writeFatal(...)` shape so adapters can
+ * surface the same `printLockoutBox('fatal_refresh_failure')` payload without
+ * a translation layer. Within `FATAL_GRACE_MS` (24h) of `occurred_at`, the
+ * gate emits a warning banner but still authorizes the session; after the
+ * grace window the gate hard-blocks.
+ *
+ * Distinct from the offline-grace window: that one is for *transient*
+ * network failures. `last-fatal.json` only ever records *authoritative*
+ * rejections (the server actually replied "no").
+ */
+export interface FatalRecord {
+  /** Mirror of CLI `kind` discriminator — always `'fatal'`. */
+  kind: 'fatal';
+  /** Why the server rejected. Drives the lockout box copy. */
+  reason: 'not_found' | 'license_invalid' | 'signature_mismatch' | 'id_mismatch';
+  /** Best-effort hostname extracted from the resolved license server URL. */
+  host?: string;
+  /** HTTP status from the failing response, when one is available. */
+  httpStatus?: number;
+  /** Human-readable message for the lockout box (NOT shown to the user verbatim). */
+  message?: string;
+  /** ISO-8601 timestamp recorded when the fatal *first* occurred (grace anchor). */
+  occurred_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Refresh-state record (refresh-state.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * On-disk shape of `{configDir}/license/refresh-state.json` — D5 transient
+ * cooldown record.
+ *
+ * When `/refresh` hits a transient failure (network / 429 / 5xx), the next
+ * `REFRESH_COOLDOWN_MS` window skips the online attempt entirely so a slow
+ * or flapping server cannot pile latency onto every CLI startup. Successful
+ * refresh clears this record.
+ *
+ * Only `kind: 'transient'` is currently written; the discriminator is kept so
+ * future CLI fail modes (rate-limited / circuit-open) can extend without a
+ * file-schema break.
+ */
+export interface RefreshStateRecord {
+  kind: 'transient';
+  /** ISO-8601 timestamp of the last transient attempt — the cooldown anchor. */
+  last_attempt: string;
+  host?: string;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +227,29 @@ export type LicenseStatus =
     }
   | { state: 'expired'; license: LicensePayload; reason: LicenseExpiredReason }
   | { state: 'revoked'; license: LicensePayload }
-  | { state: 'error'; reason: LicenseErrorReason; details?: string };
+  | {
+      state: 'error';
+      reason: LicenseErrorReason;
+      details?: string;
+      /**
+       * The license payload that was on-disk when the error was raised. Carried
+       * so the lockout box can render contextual info (license_id, expires_at,
+       * mismatch hosts). Absent when the error fired before validation —
+       * e.g. `file_corrupt` from an unreadable license.json.
+       */
+      license?: LicensePayload;
+      /**
+       * Server-side fatal record. Present when `reason === 'fatal_refresh_failure'`
+       * so the lockout box can show reason / host / httpStatus / remaining grace.
+       */
+      fatal?: FatalRecord;
+      /**
+       * Activation / runtime server URL mismatch. Present when
+       * `reason === 'server_mismatch'`. `issued` is the server pinned at
+       * activation; `current` is what the env now resolves to.
+       */
+      mismatch?: { issued: string; current: string };
+    };
 
 // ---------------------------------------------------------------------------
 // Error reasons
@@ -185,7 +289,21 @@ export type LicenseErrorReason =
    * The server reported that this license has been administratively revoked
    * (HTTP 403 during /activate, or `revoked: true` during /refresh).
    */
-  | 'server_revoked';
+  | 'server_revoked'
+  /**
+   * Persistent fatal refresh failure: the server authoritatively rejected
+   * the license (404 / 4xx / signature / id) and the 24h emergency grace
+   * window from the *first* fatal has elapsed. Carries the `fatal` record
+   * on the status so adapters can render the legacy lockout box.
+   */
+  | 'fatal_refresh_failure'
+  /**
+   * The license server URL the host now resolves to differs from the one
+   * pinned at activation (`ActivationMeta.issued_server`). Calling /refresh
+   * against the new server would pollute the wrong KV, so the gate blocks
+   * before any network traffic. Carries the `mismatch` payload.
+   */
+  | 'server_mismatch';
 
 // ---------------------------------------------------------------------------
 // Refresh outcome (returned by doRefreshNow → IPC `license.refresh`)

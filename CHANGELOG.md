@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.5] - 2026-06-17
+
+CLI-parity catch-up. Closes the three "CLI-only fallback" gaps that were
+documented in `docs/phase3-cli-adapter.md` and called out in PR #218 as
+reasons to keep the legacy default. With alpha.5 the standalone module
+covers them; the CLI adapter can flip `CORTEXDEV_LICENSE_IMPL=core` to
+the default with no behavioural regression.
+
+Wire URL unchanged from alpha.4. No server-side change required.
+
+### Added
+
+- `fatal-state.ts` — `last-fatal.json` 24h soft grace after authoritative
+  server reject. `writeFatal()` / `readFatal()` / `clearFatal()` /
+  `isFatalExpired()` / `fatalGraceRemainingHours()` mirror CLI legacy
+  `gate.js: fatal-state.js`. Anchored to *first* fatal occurrence so
+  repeated rejects don't reset the window.
+- `refresh-state.ts` — D5 cooldown record (`refresh-state.json`).
+  `REFRESH_COOLDOWN_MS = 30min`; within the window `_doRefresh` skips
+  the network attempt and falls through to offline grace so a slow
+  /flapping license server cannot add seconds to every CLI startup.
+- `ActivationMeta.issued_server?: string` + `schema_version?: number` —
+  pins the resolved license server URL at activation time. Future
+  `initialize()` calls compare this against the current resolution to
+  detect cross-environment misuse (`server_mismatch`) BEFORE any
+  `/refresh` traffic that would pollute the wrong KV.
+- `online-client.ts: getCurrentLicenseServerURL()` — public helper used
+  by both the activate path (to record `issued_server`) and the gate
+  (to detect mismatch). Returns `null` instead of throwing so a
+  misconfigured env doesn't crash the gate.
+- `LicenseStatus.error` extended with optional `license`, `fatal`, and
+  `mismatch` carryover fields so adapters can render contextual lockout
+  boxes without a translation layer. `LicenseErrorReason` gains
+  `'fatal_refresh_failure'` and `'server_mismatch'`.
+- `FatalRecord` and `RefreshStateRecord` types in the public surface.
+
+### Changed
+
+- `LicenseService.initialize()` runs two new guards after validation +
+  offline-grace and before refresh scheduling:
+  1. `server_mismatch` — only when `activationMeta.issued_server` is set
+     (v1 records skip; back-compat). Hard-stops at error/server_mismatch.
+  2. `fatal-state grace` — reads `last-fatal.json`. Expired → status
+     becomes error/fatal_refresh_failure carrying the `fatal` record.
+     Within grace → keep active, log a warning with `hoursRemaining`.
+- `LicenseService._doRefresh()` consults `isWithinCooldown()` before
+  the network call. If true: skip fetch, apply offline grace,
+  return `network_error`.
+- `_handleRefreshFailure` (transient branch) writes refresh-state.
+  `_handleRefreshFailure` (rejection, non-revoked) writes last-fatal
+  *only on first occurrence*.
+- `_handleRefreshSuccess` clears both fatal-state and refresh-state on
+  the non-revoked path. `_processActivation` does the same on a
+  successful online activate (activation is a recovery point too).
+- `_processActivation` records `issued_server` + `schema_version: 2`
+  in `ActivationMeta` when `serverSynced` is true.
+
+### Compatibility
+
+- Wire format unchanged. Server unchanged. v1 activation records (no
+  `issued_server`) still authorise — the mismatch check is opt-in via
+  presence of the field. Hosts that don't trigger online activation
+  (CLI-mocked test envs) get `issued_server` left undefined exactly
+  as in alpha.4.
+- `printLockoutBox` in the CLI adapter receives the same `{reason,
+  license, fatal, mismatch}` shape as legacy gate.js → no UI change.
+
+
 ## [1.0.0-alpha.4] - 2026-06-17
 
 GA-blocker bug fix. The `device_limit_exceeded` and `license_revoked`

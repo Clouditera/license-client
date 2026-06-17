@@ -28,16 +28,30 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { LEGACY_KEY_SUNSET, setLegacyKeyHitListener } from './crypto.js';
+import {
+  clearFatal,
+  fatalGraceRemainingHours,
+  isFatalExpired,
+  readFatal,
+  writeFatal,
+} from './fatal-state.js';
 import { collectFingerprint } from './fingerprint.js';
 import { verifyOnlineCheckToken } from './online-check.js';
 import { readOnlineCheck, writeOnlineCheck } from './online-check-store.js';
 import {
   onlineActivate,
   onlineRefresh,
+  getCurrentLicenseServerURL,
   type ActivateResponse,
   type OnlineClientError,
   type RefreshResponse,
 } from './online-client.js';
+import {
+  clearRefreshState,
+  isWithinCooldown,
+  readRefreshState,
+  writeRefreshState,
+} from './refresh-state.js';
 import {
   deleteLicense,
   readActivationMeta,
@@ -50,6 +64,7 @@ import { EMBEDDED_TOKEN_PUBLIC_KEY } from './token-key.js';
 import type {
   ActivationMeta,
   ActivationResult,
+  FatalRecord,
   LicenseErrorReason,
   LicenseFile,
   LicenseStatus,
@@ -250,6 +265,46 @@ export class LicenseService {
 
       if (this.status.state === 'active' && activationMeta?.last_verified_at) {
         this.status = this._applyOfflineGrace(this.status, activationMeta.last_verified_at);
+      }
+
+      // server_mismatch detection — runs BEFORE refresh scheduling so a wrong
+      // env never reaches /refresh. Uses meta.issued_server pinned at activate
+      // time; v1 records without the field skip this guard (back-compat).
+      if (this.status.state === 'active' && activationMeta?.issued_server) {
+        const current = getCurrentLicenseServerURL();
+        if (current && activationMeta.issued_server !== current.url) {
+          this.status = {
+            state: 'error',
+            reason: 'server_mismatch',
+            license: licenseFile.payload,
+            mismatch: { issued: activationMeta.issued_server, current: current.url },
+          };
+          return;
+        }
+      }
+
+      // fatal-state grace — a prior /refresh fatal hard-blocks once the 24h
+      // window has elapsed. Within grace we keep the user active (with a
+      // warning the adapter surfaces) so a transient KV mistake doesn't
+      // instantly lock everyone out.
+      if (this.status.state === 'active') {
+        const fatal = readFatal(this.configDir);
+        if (fatal) {
+          if (isFatalExpired(fatal)) {
+            this.status = {
+              state: 'error',
+              reason: 'fatal_refresh_failure',
+              license: licenseFile.payload,
+              fatal,
+            };
+            return;
+          }
+          serviceLogger.warn('LicenseService.initialize: prior fatal refresh within grace window', {
+            reason: fatal.reason,
+            host: fatal.host,
+            hoursRemaining: fatalGraceRemainingHours(fatal),
+          });
+        }
       }
 
       if (this.status.state === 'active') {
@@ -490,11 +545,20 @@ export class LicenseService {
 
       writeLicense(this.configDir, typedLicenseFile);
 
+      // Pin the server URL that issued this activation, so a later
+      // initialize() can detect cross-environment misuse (server_mismatch).
+      // Resolved at call time, NOT cached at module load, because adapters
+      // may flip the env between activations. Best-effort — a null result
+      // (invalid env) just leaves `issued_server` unset, preserving v1 meta
+      // semantics for environments that already had the misconfiguration.
+      const resolvedServer = serverSynced ? getCurrentLicenseServerURL() : null;
+
       writeActivationMeta(this.configDir, {
         last_verified_at: now,
         activated_at: activationMeta?.activated_at ?? now,
         fingerprint_at_activation: fingerprint ?? undefined,
         activation_id,
+        ...(resolvedServer ? { issued_server: resolvedServer.url, schema_version: 2 } : {}),
       });
 
       // Persist the D4 online_check_token + server_time so a subsequent
@@ -508,6 +572,17 @@ export class LicenseService {
           onlineActivateData.server_time,
           onlineActivateData.online_check_token
         );
+      }
+
+      // Successful activate clears any stale fatal/cooldown state — same
+      // recovery semantics as a successful refresh.
+      try {
+        clearFatal(this.configDir);
+        clearRefreshState(this.configDir);
+      } catch (e) {
+        serviceLogger.warn('LicenseService.activate: failed to clear fatal/refresh-state', {
+          error: String(e),
+        });
       }
 
       this.status = result;
@@ -588,6 +663,19 @@ export class LicenseService {
         return { kind: 'network_error' };
       }
 
+      // D5 cooldown — if a recent /refresh failed transiently, skip the next
+      // online attempt entirely so a slow/broken endpoint can't add latency to
+      // every startup. Offline-grace still gates the session.
+      const cooldownState = readRefreshState(this.configDir);
+      if (isWithinCooldown(cooldownState)) {
+        serviceLogger.debug?.('LicenseService.refresh: skipped (within transient cooldown)', {
+          host: cooldownState?.host,
+        });
+        this._handleOfflineGrace(meta, licenseFile);
+        this._scheduleNextRefresh(REFRESH_RETRY_MS);
+        return { kind: 'network_error' };
+      }
+
       const refreshPromise = onlineRefresh({
         license_id: licenseFile.payload.license_id,
         activation_id: meta.activation_id,
@@ -641,15 +729,63 @@ export class LicenseService {
       serviceLogger.warn('LicenseService.refresh: availability failure, applying offline grace', {
         error: errorType,
       });
+      // D5 — record the transient so the next startup skips the network call
+      // for REFRESH_COOLDOWN_MS. revoked / fatal paths intentionally do NOT
+      // write this; they're authoritative server decisions.
+      try {
+        writeRefreshState(this.configDir, {
+          kind: 'transient',
+          last_attempt: new Date().toISOString(),
+          error: errorType,
+        });
+      } catch (e) {
+        serviceLogger.warn('LicenseService.refresh: failed to persist refresh-state', {
+          error: String(e),
+        });
+      }
       this._handleOfflineGrace(meta, licenseFile);
       this._scheduleNextRefresh(REFRESH_RETRY_MS);
       return { kind: 'network_error' };
     }
 
     serviceLogger.warn('LicenseService.refresh: server rejected license', { reason: rejection });
+
+    // Persist last-fatal on the *first* authoritative reject so the 24h grace
+    // window anchors to the initial failure (not the most recent retry).
+    // 'revoked' is NOT a "fatal" in the legacy CLI sense — it's a deliberate
+    // admin action with its own UI box, so don't overwrite the fatal record.
+    if (rejection !== 'revoked') {
+      try {
+        const existing = readFatal(this.configDir);
+        if (!existing) {
+          writeFatal(this.configDir, this._buildFatalRecord(rejection));
+        }
+      } catch (e) {
+        serviceLogger.warn('LicenseService.refresh: failed to persist last-fatal', {
+          error: String(e),
+        });
+      }
+    }
+
     this._applyServerRejection(rejection, meta, licenseFile);
     this._scheduleNextRefresh(REFRESH_RETRY_MS);
     return { kind: 'server_rejected', reason: rejection };
+  }
+
+  private _buildFatalRecord(rejection: RefreshRejectionReason): FatalRecord {
+    // RefreshRejectionReason → FatalRecord.reason mapping. license-mgr's
+    // current rejection alphabet is narrower than CLI's; map to the closest
+    // legacy bucket so printLockoutBox copy stays useful.
+    const reason: FatalRecord['reason'] =
+      rejection === 'not_found' ? 'not_found' : 'license_invalid';
+    const host = getCurrentLicenseServerURL()?.hostname;
+    return {
+      kind: 'fatal',
+      reason,
+      ...(host ? { host } : {}),
+      message: rejection,
+      occurred_at: new Date().toISOString(),
+    };
   }
 
   private async _handleRefreshSuccess(
@@ -690,6 +826,18 @@ export class LicenseService {
     // online-check-store omits the `signed_token` field while still bumping
     // `last_online_check` + `server_time` so legacy Path B keeps working.
     writeOnlineCheck(this.configDir, refreshData.server_time, refreshData.online_check_token);
+
+    // Recovery path: a successful refresh clears both the fatal record and
+    // the transient cooldown so the next invocation refreshes on schedule.
+    // Best-effort — failures here don't block authorization.
+    try {
+      clearFatal(this.configDir);
+      clearRefreshState(this.configDir);
+    } catch (e) {
+      serviceLogger.warn('LicenseService.refresh: failed to clear fatal/refresh-state', {
+        error: String(e),
+      });
+    }
 
     await this._applyRefreshNotRevoked(licenseFile, meta, now);
     this._scheduleNextRefresh(hostEnv.refreshIntervalMs ?? REFRESH_INTERVAL_MS);

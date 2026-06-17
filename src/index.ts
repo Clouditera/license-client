@@ -25,6 +25,7 @@ export type { Result } from './result.js';
 export type {
   ActivationMeta,
   ActivationResult,
+  FatalRecord,
   FingerprintResult,
   LicenseErrorReason,
   LicenseExpiredReason,
@@ -36,6 +37,7 @@ export type {
   OnlineCheckVerdict,
   RefreshOutcome,
   RefreshRejectionReason,
+  RefreshStateRecord,
   ServerStatus,
   SignedToken,
 } from './types.js';
@@ -127,6 +129,7 @@ export {
   onlineActivate,
   onlineRefresh,
   setOnlineClientLogger,
+  getCurrentLicenseServerURL,
   ALLOWED_LICENSE_HOSTS,
 } from './online-client.js';
 export type {
@@ -136,6 +139,31 @@ export type {
   RefreshRequest,
   RefreshResponse,
 } from './online-client.js';
+
+// ---------------------------------------------------------------------------
+// Fatal-state (CLI-parity: 24h grace after authoritative server reject)
+// ---------------------------------------------------------------------------
+
+export {
+  FATAL_GRACE_MS,
+  clearFatal,
+  fatalGraceRemainingHours,
+  isFatalExpired,
+  readFatal,
+  writeFatal,
+} from './fatal-state.js';
+
+// ---------------------------------------------------------------------------
+// Refresh-state (CLI-parity D5: transient cooldown to avoid startup latency)
+// ---------------------------------------------------------------------------
+
+export {
+  REFRESH_COOLDOWN_MS,
+  clearRefreshState,
+  isWithinCooldown,
+  readRefreshState,
+  writeRefreshState,
+} from './refresh-state.js';
 
 // ---------------------------------------------------------------------------
 // LicenseService (top-level orchestrator)
@@ -150,4 +178,4 @@ export {
 } from './license-service.js';
 export type { BinaryDownloadHooks, HostEnvironment, ServiceLogger } from './license-service.js';
 
-export const VERSION = '1.0.0-alpha.4';
+export const VERSION = '1.0.0-alpha.5';

@@ -20,6 +20,23 @@ vi.mock('./store.js', () => ({
   writeActivationMeta: vi.fn(),
 }));
 
+vi.mock('./fatal-state.js', () => ({
+  FATAL_GRACE_MS: 24 * 60 * 60 * 1000,
+  readFatal: vi.fn(() => null),
+  writeFatal: vi.fn(),
+  clearFatal: vi.fn(),
+  isFatalExpired: vi.fn(() => true),
+  fatalGraceRemainingHours: vi.fn(() => 0),
+}));
+
+vi.mock('./refresh-state.js', () => ({
+  REFRESH_COOLDOWN_MS: 30 * 60 * 1000,
+  readRefreshState: vi.fn(() => null),
+  writeRefreshState: vi.fn(),
+  clearRefreshState: vi.fn(),
+  isWithinCooldown: vi.fn(() => false),
+}));
+
 vi.mock('./fingerprint.js', () => ({
   collectFingerprint: vi.fn(),
 }));
@@ -27,6 +44,9 @@ vi.mock('./fingerprint.js', () => ({
 vi.mock('./online-client.js', () => ({
   onlineActivate: vi.fn(),
   onlineRefresh: vi.fn(),
+  // Default null so the activate path skips writing issued_server/schema_version
+  // unless a test opts in. Mirrors CLI gate.js behaviour when env-resolve fails.
+  getCurrentLicenseServerURL: vi.fn(() => null),
 }));
 
 vi.mock('./validator.js', () => ({
@@ -74,6 +94,8 @@ const validatorMock = await import('./validator.js');
 const fsMock = await import('node:fs');
 const onlineCheckStoreMock = await import('./online-check-store.js');
 const onlineCheckMock = await import('./online-check.js');
+const fatalStateMock = await import('./fatal-state.js');
+const refreshStateMock = await import('./refresh-state.js');
 const { LicenseService, setHostEnvironment, setServiceLogger, setBinaryDownloadHooks } =
   await import('./license-service.js');
 
@@ -1476,6 +1498,284 @@ describe('LicenseService', () => {
 
       svc.dispose();
       setPackaged(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 CLI-parity gaps: fatal_refresh_failure / server_mismatch / cooldown
+  // ---------------------------------------------------------------------------
+
+  describe('Phase 3 CLI-parity (fatal / server_mismatch / cooldown)', () => {
+    beforeEach(() => {
+      vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+      vi.mocked(storeMock.readActivationMeta).mockReturnValue(makeActivationMeta());
+      vi.mocked(validatorMock.validateLicense).mockReturnValue({
+        valid: true,
+        license: makePayload(),
+      });
+      vi.mocked(fatalStateMock.readFatal).mockReturnValue(null);
+      vi.mocked(refreshStateMock.readRefreshState).mockReturnValue(null);
+      vi.mocked(refreshStateMock.isWithinCooldown).mockReturnValue(false);
+      vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue(null);
+    });
+
+    describe('initialize() — server_mismatch', () => {
+      it('flips status to error/server_mismatch when env URL differs from issued_server', async () => {
+        vi.mocked(storeMock.readActivationMeta).mockReturnValue({
+          ...makeActivationMeta(),
+          issued_server: 'https://license.clouditera.online/api/v1',
+          schema_version: 2,
+        });
+        vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue({
+          url: 'https://license-staging.cloudrouter.online/api/v1',
+          hostname: 'license-staging.cloudrouter.online',
+        });
+
+        const svc = new LicenseService();
+        await svc.initialize();
+        const status = svc.getStatus();
+
+        expect(status.state).toBe('error');
+        if (status.state === 'error') {
+          expect(status.reason).toBe('server_mismatch');
+          expect(status.mismatch).toEqual({
+            issued: 'https://license.clouditera.online/api/v1',
+            current: 'https://license-staging.cloudrouter.online/api/v1',
+          });
+        }
+        svc.dispose();
+      });
+
+      it('stays active when env URL matches issued_server', async () => {
+        vi.mocked(storeMock.readActivationMeta).mockReturnValue({
+          ...makeActivationMeta(),
+          issued_server: 'https://license.clouditera.online/api/v1',
+          schema_version: 2,
+        });
+        vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue({
+          url: 'https://license.clouditera.online/api/v1',
+          hostname: 'license.clouditera.online',
+        });
+
+        const svc = new LicenseService();
+        await svc.initialize();
+        expect(svc.getStatus().state).toBe('active');
+        svc.dispose();
+      });
+
+      it('skips check when issued_server is absent (v1 records back-compat)', async () => {
+        // meta has no issued_server; env resolves to anything
+        vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue({
+          url: 'https://license-staging.cloudrouter.online/api/v1',
+          hostname: 'license-staging.cloudrouter.online',
+        });
+
+        const svc = new LicenseService();
+        await svc.initialize();
+        expect(svc.getStatus().state).toBe('active');
+        svc.dispose();
+      });
+    });
+
+    describe('initialize() — fatal_refresh_failure', () => {
+      it('flips to error/fatal_refresh_failure when prior fatal is past grace', async () => {
+        const fatal = {
+          kind: 'fatal' as const,
+          reason: 'not_found' as const,
+          host: 'license.clouditera.online',
+          httpStatus: 404,
+          message: 'HTTP 404',
+          occurred_at: '2026-06-15T00:00:00Z',
+        };
+        vi.mocked(fatalStateMock.readFatal).mockReturnValue(fatal);
+        vi.mocked(fatalStateMock.isFatalExpired).mockReturnValue(true);
+
+        const svc = new LicenseService();
+        await svc.initialize();
+        const status = svc.getStatus();
+
+        expect(status.state).toBe('error');
+        if (status.state === 'error') {
+          expect(status.reason).toBe('fatal_refresh_failure');
+          expect(status.fatal).toEqual(fatal);
+        }
+        svc.dispose();
+      });
+
+      it('stays active within grace window (24h since first fatal)', async () => {
+        vi.mocked(fatalStateMock.readFatal).mockReturnValue({
+          kind: 'fatal',
+          reason: 'not_found',
+          occurred_at: new Date().toISOString(),
+        });
+        vi.mocked(fatalStateMock.isFatalExpired).mockReturnValue(false);
+        vi.mocked(fatalStateMock.fatalGraceRemainingHours).mockReturnValue(23);
+
+        const svc = new LicenseService();
+        await svc.initialize();
+        expect(svc.getStatus().state).toBe('active');
+        svc.dispose();
+      });
+    });
+
+    describe('_doRefresh — transient cooldown', () => {
+      it('skips network call when within cooldown', async () => {
+        vi.mocked(refreshStateMock.isWithinCooldown).mockReturnValue(true);
+        const refreshSpy = vi.mocked(onlineMock.onlineRefresh);
+        refreshSpy.mockReset();
+
+        const svc = new LicenseService();
+        const { outcome } = await svc.doRefreshNow();
+
+        expect(refreshSpy).not.toHaveBeenCalled();
+        expect(outcome.kind).toBe('network_error');
+        svc.dispose();
+      });
+
+      it('writes refresh-state on transient (network_error) failure', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: false,
+          error: { type: 'network_error' },
+        });
+        const writeSpy = vi.mocked(refreshStateMock.writeRefreshState);
+        writeSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+
+        expect(writeSpy).toHaveBeenCalledOnce();
+        const arg = writeSpy.mock.calls[0]?.[1];
+        expect(arg?.kind).toBe('transient');
+        expect(arg?.error).toBe('network_error');
+        svc.dispose();
+      });
+
+      it('clears refresh-state + fatal on successful refresh', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: true,
+          data: {
+            revoked: false,
+            server_time: '2026-06-17T00:00:00Z',
+            license: null,
+          },
+        });
+        const clearStateSpy = vi.mocked(refreshStateMock.clearRefreshState);
+        const clearFatalSpy = vi.mocked(fatalStateMock.clearFatal);
+        clearStateSpy.mockClear();
+        clearFatalSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+
+        expect(clearStateSpy).toHaveBeenCalledOnce();
+        expect(clearFatalSpy).toHaveBeenCalledOnce();
+        svc.dispose();
+      });
+    });
+
+    describe('_doRefresh — fatal record', () => {
+      it('writes last-fatal on server_rejected (not_found)', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: false,
+          error: { type: 'not_found' },
+        });
+        const writeSpy = vi.mocked(fatalStateMock.writeFatal);
+        writeSpy.mockClear();
+        vi.mocked(fatalStateMock.readFatal).mockReturnValue(null);
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+
+        expect(writeSpy).toHaveBeenCalledOnce();
+        const arg = writeSpy.mock.calls[0]?.[1];
+        expect(arg?.kind).toBe('fatal');
+        expect(arg?.reason).toBe('not_found');
+        svc.dispose();
+      });
+
+      it('does NOT overwrite an existing fatal record (grace anchored to first)', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: false,
+          error: { type: 'not_found' },
+        });
+        vi.mocked(fatalStateMock.readFatal).mockReturnValue({
+          kind: 'fatal',
+          reason: 'not_found',
+          occurred_at: '2026-06-15T00:00:00Z',
+        });
+        const writeSpy = vi.mocked(fatalStateMock.writeFatal);
+        writeSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+
+        expect(writeSpy).not.toHaveBeenCalled();
+        svc.dispose();
+      });
+
+      it('does NOT write last-fatal on revoked (revoked is its own UI box)', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: false,
+          error: { type: 'license_revoked' },
+        });
+        const writeSpy = vi.mocked(fatalStateMock.writeFatal);
+        writeSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+
+        expect(writeSpy).not.toHaveBeenCalled();
+        svc.dispose();
+      });
+    });
+
+    describe('activate() — issued_server persistence', () => {
+      it('writes issued_server + schema_version: 2 on successful online activate', async () => {
+        vi.mocked(onlineMock.onlineActivate).mockResolvedValue({
+          success: true,
+          data: {
+            status: 'activated',
+            server_time: '2026-06-17T00:00:00Z',
+            activation_id: 'test-id',
+          },
+        });
+        vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue({
+          url: 'https://license.clouditera.online/api/v1',
+          hostname: 'license.clouditera.online',
+        });
+        const writeMetaSpy = vi.mocked(storeMock.writeActivationMeta);
+        writeMetaSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+
+        expect(writeMetaSpy).toHaveBeenCalled();
+        const meta = writeMetaSpy.mock.calls.at(-1)?.[1];
+        expect(meta?.issued_server).toBe('https://license.clouditera.online/api/v1');
+        expect(meta?.schema_version).toBe(2);
+        svc.dispose();
+      });
+
+      it('omits issued_server when serverSynced is false (offline-grace activate)', async () => {
+        vi.mocked(onlineMock.onlineActivate).mockResolvedValue({
+          success: false,
+          error: { type: 'network_error' },
+        });
+        vi.mocked(onlineMock.getCurrentLicenseServerURL).mockReturnValue({
+          url: 'https://license.clouditera.online/api/v1',
+          hostname: 'license.clouditera.online',
+        });
+        const writeMetaSpy = vi.mocked(storeMock.writeActivationMeta);
+        writeMetaSpy.mockClear();
+
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+
+        const meta = writeMetaSpy.mock.calls.at(-1)?.[1];
+        expect(meta?.issued_server).toBeUndefined();
+        expect(meta?.schema_version).toBeUndefined();
+        svc.dispose();
+      });
     });
   });
 });

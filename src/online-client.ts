@@ -138,6 +138,27 @@ function assertAllowedUrl(rawUrl: string): URL {
   return parsed;
 }
 
+/**
+ * Resolve the base URL exactly as `post()` does (env → default), then enforce
+ * HTTPS + allowlist. Public so adapters can pin `ActivationMeta.issued_server`
+ * to the same value the next /refresh call will hit, and so the initialize
+ * gate can detect `server_mismatch` before any network traffic.
+ *
+ * Returns `null` when env points at a URL that fails HTTPS/allowlist — the
+ * gate is responsible for surfacing the configuration error, but should not
+ * crash. (Mirrors CLI `gate.js` swallowing of `resolveLicenseServerURL()`
+ * throws into a `currentServer = null` branch.)
+ */
+export function getCurrentLicenseServerURL(): { url: string; hostname: string } | null {
+  try {
+    const raw = getBaseUrl();
+    const parsed = assertAllowedUrl(raw);
+    return { url: raw, hostname: parsed.hostname };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
