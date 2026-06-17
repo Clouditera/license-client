@@ -1165,4 +1165,178 @@ describe('LicenseService', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // D4 token persistence — activate/refresh write online-check.json
+  // -------------------------------------------------------------------------
+  describe('D4 token persistence (writeOnlineCheck wiring)', () => {
+    const SIGNED_TOKEN = {
+      payload: {
+        license_id: 'lic-123',
+        server_time: '2026-06-16T00:00:00.000Z',
+        expires_at: '2026-06-23T00:00:00.000Z',
+      },
+      signature: 'base64-sig',
+    };
+
+    beforeEach(() => {
+      vi.mocked(onlineCheckStoreMock.writeOnlineCheck).mockClear();
+    });
+
+    // ── activate() side ────────────────────────────────────────────────────
+    describe('activate()', () => {
+      it('persists online_check_token when server returns one', async () => {
+        vi.mocked(onlineMock.onlineActivate).mockResolvedValue({
+          success: true,
+          data: {
+            status: 'activated',
+            server_time: '2026-06-16T00:00:00.000Z',
+            activation_id: 'act-uuid-1',
+            online_check_token: SIGNED_TOKEN,
+          },
+        });
+
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledOnce();
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledWith(
+          expect.any(String),
+          '2026-06-16T00:00:00.000Z',
+          SIGNED_TOKEN
+        );
+      });
+
+      it('persists server_time with undefined token when pre-D4 server omits it', async () => {
+        // Default mock already lacks online_check_token — confirm it's
+        // forwarded as undefined so online-check-store can omit signed_token
+        // while still bumping last_online_check.
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledOnce();
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledWith(
+          expect.any(String),
+          '2026-05-21T00:00:00Z',
+          undefined
+        );
+      });
+
+      it('does NOT write online-check.json when online activate fails (offline grace path)', async () => {
+        vi.mocked(onlineMock.onlineActivate).mockResolvedValue({
+          success: false,
+          error: { type: 'network_error', message: 'ETIMEDOUT' },
+        });
+
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).not.toHaveBeenCalled();
+      });
+
+      it('does NOT write online-check.json when fingerprint is unavailable (skips online entirely)', async () => {
+        vi.mocked(fingerprintMock.collectFingerprint).mockRejectedValue(new Error('no hw'));
+
+        const svc = new LicenseService();
+        await svc.activate(JSON.stringify(makeLicenseFile()));
+        svc.dispose();
+
+        expect(onlineMock.onlineActivate).not.toHaveBeenCalled();
+        expect(onlineCheckStoreMock.writeOnlineCheck).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── doRefreshNow() side ────────────────────────────────────────────────
+    describe('doRefreshNow()', () => {
+      beforeEach(() => {
+        vi.mocked(storeMock.readActivationMeta).mockReturnValue(makeActivationMeta());
+        vi.mocked(storeMock.readLicense).mockReturnValue(makeLicenseFile());
+        // Status must be 'active' for refresh to reach the success branch
+        // without short-circuiting on bad state — set up via initialize().
+      });
+
+      it('persists online_check_token when server returns one on non-revoked refresh', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: true,
+          data: {
+            revoked: false,
+            server_time: '2026-06-16T01:00:00.000Z',
+            license: null,
+            online_check_token: SIGNED_TOKEN,
+          },
+        });
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledOnce();
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledWith(
+          expect.any(String),
+          '2026-06-16T01:00:00.000Z',
+          SIGNED_TOKEN
+        );
+      });
+
+      it('persists server_time with undefined token when pre-D4 server omits it', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: true,
+          data: {
+            revoked: false,
+            server_time: '2026-06-16T02:00:00.000Z',
+            license: null,
+          },
+        });
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledOnce();
+        expect(onlineCheckStoreMock.writeOnlineCheck).toHaveBeenCalledWith(
+          expect.any(String),
+          '2026-06-16T02:00:00.000Z',
+          undefined
+        );
+      });
+
+      it('does NOT write online-check.json on revoked refresh (denies continued offline use)', async () => {
+        // CLI / server contract: revoked responses intentionally omit
+        // online_check_token. Even if a buggy/tampered server attached one,
+        // we must not persist a fresh grace token for a revoked license.
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: true,
+          data: {
+            revoked: true,
+            server_time: '2026-06-16T03:00:00.000Z',
+            revoked_at: '2026-06-15T00:00:00.000Z',
+            reason: 'admin_revoke',
+            license: null,
+          },
+        });
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).not.toHaveBeenCalled();
+      });
+
+      it('does NOT write online-check.json on network failure', async () => {
+        vi.mocked(onlineMock.onlineRefresh).mockResolvedValue({
+          success: false,
+          error: { type: 'network_error', message: 'ETIMEDOUT' },
+        });
+
+        const svc = new LicenseService();
+        await svc.doRefreshNow();
+        svc.dispose();
+
+        expect(onlineCheckStoreMock.writeOnlineCheck).not.toHaveBeenCalled();
+      });
+    });
+  });
 });

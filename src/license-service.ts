@@ -30,10 +30,11 @@ import { readFileSync } from 'node:fs';
 import { LEGACY_KEY_SUNSET, setLegacyKeyHitListener } from './crypto.js';
 import { collectFingerprint } from './fingerprint.js';
 import { verifyOnlineCheckToken } from './online-check.js';
-import { readOnlineCheck } from './online-check-store.js';
+import { readOnlineCheck, writeOnlineCheck } from './online-check-store.js';
 import {
   onlineActivate,
   onlineRefresh,
+  type ActivateResponse,
   type OnlineClientError,
   type RefreshResponse,
 } from './online-client.js';
@@ -436,6 +437,7 @@ export class LicenseService {
       const activation_id = activationMeta?.activation_id ?? randomUUID();
 
       let serverSynced = false;
+      let onlineActivateData: ActivateResponse | undefined;
       const typedLicenseFile = licenseFile as LicenseFile;
 
       if (fingerprint) {
@@ -462,6 +464,7 @@ export class LicenseService {
           );
         } else {
           serverSynced = true;
+          onlineActivateData = onlineResult.data;
         }
       }
 
@@ -473,6 +476,19 @@ export class LicenseService {
         fingerprint_at_activation: fingerprint ?? undefined,
         activation_id,
       });
+
+      // Persist the D4 online_check_token + server_time so a subsequent
+      // restart (potentially offline) can go through Path A in
+      // checkOfflineGrace. When we fell back to offline grace, there is no
+      // server response — skip the write entirely (CLI gate.js semantics:
+      // missing online-check.json = offline_expired until next /refresh).
+      if (onlineActivateData) {
+        writeOnlineCheck(
+          this.configDir,
+          onlineActivateData.server_time,
+          onlineActivateData.online_check_token
+        );
+      }
 
       this.status = result;
       if (hostEnv.isPackaged()) {
@@ -621,6 +637,17 @@ export class LicenseService {
       }
       return { kind: 'server_rejected', reason: 'revoked' };
     }
+
+    // Persist last_online_check / server_time / signed_token for offline grace.
+    // server omits `online_check_token` on revoked responses (deliberate D4
+    // server behaviour — see server/license-api/src/routes/refresh.js), so the
+    // write only happens on the non-revoked branch.
+    //
+    // When the server response has no token (pre-D4 deployment OR token
+    // signing failed on the server), `online_check_token` is undefined and
+    // online-check-store omits the `signed_token` field while still bumping
+    // `last_online_check` + `server_time` so legacy Path B keeps working.
+    writeOnlineCheck(this.configDir, refreshData.server_time, refreshData.online_check_token);
 
     await this._applyRefreshNotRevoked(licenseFile, meta, now);
     this._scheduleNextRefresh(REFRESH_INTERVAL_MS);
