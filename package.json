@@ -39,6 +39,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "verify:trust-root": "node scripts/verify-trust-root.mjs",
+    "diagnose:token-key": "node scripts/diagnose-token-key.mjs",
     "ci": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm verify:trust-root",
     "prepublishOnly": "pnpm ci"
   },
