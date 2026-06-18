@@ -35,7 +35,7 @@ import {
   readFatal,
   writeFatal,
 } from './fatal-state.js';
-import { collectFingerprint } from './fingerprint.js';
+import { _collectFingerprintWithOverride } from './fingerprint.js';
 import { verifyOnlineCheckToken } from './online-check.js';
 import { readOnlineCheck, writeOnlineCheck } from './online-check-store.js';
 import {
@@ -245,13 +245,30 @@ export class LicenseService {
         return;
       }
 
+      // Two-layer fingerprint collection (mirrors CLI gate.js):
+      //   1. Fresh collect (skipCache: true) — preferred, picks up hardware
+      //      changes immediately.
+      //   2. If fresh collect THROWS (insufficient hardware identifiers
+      //      visible to this process), fall back to the on-disk cache so a
+      //      previously-good activation survives a transient hardware-probe
+      //      failure (cold-start WMI on Windows, missing IOKit permissions
+      //      on macOS, etc.). Only used when fresh collection cannot produce
+      //      *any* fingerprint at all.
       let fingerprint: string | null = null;
       try {
-        fingerprint = await collectFingerprint(this.configDir, { skipCache: true });
+        fingerprint = await _collectFingerprintWithOverride(this.configDir, { skipCache: true });
       } catch (e) {
         serviceLogger.warn('LicenseService.initialize: fingerprint collection failed', {
           error: String(e),
         });
+        try {
+          fingerprint = await _collectFingerprintWithOverride(this.configDir, { skipCache: false });
+          serviceLogger.warn('LicenseService.initialize: recovered fingerprint from cache', {});
+        } catch (cacheErr) {
+          serviceLogger.warn('LicenseService.initialize: fingerprint cache also unavailable', {
+            error: String(cacheErr),
+          });
+        }
       }
 
       const activationMeta = readActivationMeta(this.configDir);
@@ -262,6 +279,32 @@ export class LicenseService {
       }
 
       this.status = this._validate(licenseFile, fingerprint, activationMeta);
+
+      // Fingerprint-mismatch recovery (mirrors CLI gate.js): hardware collectors
+      // (e.g. WMI on Windows) can return partial data on cold start, producing
+      // a hash that differs from the activation-time value. Retry once with
+      // the persisted cache before hard-rejecting.
+      if (
+        this.status.state === 'error' &&
+        this.status.reason === 'fingerprint_mismatch' &&
+        fingerprint !== null
+      ) {
+        try {
+          const cached = await _collectFingerprintWithOverride(this.configDir, {
+            skipCache: false,
+          });
+          if (cached && cached !== fingerprint) {
+            const retry = this._validate(licenseFile, cached, activationMeta);
+            if (retry.state === 'active') {
+              serviceLogger.warn('LicenseService.initialize: recovered via cached fingerprint', {});
+              this.status = retry;
+              fingerprint = cached;
+            }
+          }
+        } catch {
+          // cache unavailable — original fingerprint_mismatch verdict stands.
+        }
+      }
 
       if (this.status.state === 'active' && activationMeta?.last_verified_at) {
         this.status = this._applyOfflineGrace(this.status, activationMeta.last_verified_at);
@@ -497,7 +540,7 @@ export class LicenseService {
   private async _processActivation(licenseFile: unknown): Promise<ActivationResult> {
     let fingerprint: string | null = null;
     try {
-      fingerprint = await collectFingerprint(this.configDir);
+      fingerprint = await _collectFingerprintWithOverride(this.configDir);
     } catch (e) {
       serviceLogger.warn('LicenseService.activate: fingerprint collection failed', {
         error: String(e),
@@ -860,7 +903,7 @@ export class LicenseService {
     }
 
     if (this.status.state === 'expired' && this.status.reason === 'offline_grace_exceeded') {
-      const fp = await collectFingerprint(this.configDir).catch(() => null);
+      const fp = await _collectFingerprintWithOverride(this.configDir).catch(() => null);
       this.status = this._validate(licenseFile, fp, { ...meta, last_verified_at: now });
       this._emitStatusChange();
     }

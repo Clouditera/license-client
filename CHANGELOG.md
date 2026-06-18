@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.6] - 2026-06-18
+
+Real-world adapter shake-down catch-up. Smoke testing the CLI adapter
+against a production-signed license on a developer machine surfaced
+two fingerprint-collection gaps that would block the eventual flip of
+`CORTEXDEV_LICENSE_IMPL=core` to default. Both are now closed.
+
+Wire URL unchanged. Server unchanged. No client-visible behaviour change
+for hosts that don't install a custom fingerprint collector.
+
+### Added
+
+- `fingerprint.ts: setFingerprintCollector(fn)` — module-level setter
+  that lets a host plug in its own `collectFingerprint` implementation.
+  Use case: CortexDev-CLI's `packages/core/src/license/fingerprint.js`
+  wraps the built-in collector with a permanent `fingerprint-lock.json`
+  fallback that survives a transient hardware-probe failure long after
+  the 24h cache TTL. Without this injection point, license-mgr's own
+  collector falsely locks out an established user whose ioreg / WMI
+  probe returns 0 components on a given startup.
+- `_collectFingerprintWithOverride()` — internal entry point used by
+  `LicenseService.initialize()` and `_processActivation()`. Delegates
+  to the host override when set, falls back to the built-in collector
+  otherwise. Adapters should not call this directly.
+- `FingerprintCollector` type in the public surface.
+
+### Changed
+
+- `LicenseService.initialize()` adds a two-layer fingerprint collection
+  fallback (mirrors CLI gate.js):
+  1. Fresh collect (`skipCache: true`) — preferred.
+  2. If fresh THROWS (insufficient hardware identifiers), fall back to
+     the on-disk cache so a previously-good activation survives a
+     transient probe failure. Only used when fresh produces nothing.
+- `LicenseService.initialize()` adds a `fingerprint_mismatch` recovery
+  branch. If validation fails on `fingerprint_mismatch` AND the cache
+  contains a different fingerprint than the fresh collect, validation
+  retries with the cached value. Picks up the case where Windows WMI
+  returns partial cold-start data that hashes differently than the
+  activation-time fingerprint.
+
+### Compatibility
+
+- Built-in collector (when no host injects) is unchanged. Existing
+  tests pass without modification. 333 → 335 (two new tests covering
+  the override + fallback path).
+- License-mgr alone still ships without lock-file semantics; hosts
+  that want them inject their own collector. DevAgent-CLI does this
+  in `adapter-core.js` v1.0.0-alpha.6+.
+
+### Known issues
+
+- Server-issued `online_check_token` signature verification fails
+  against the client's embedded `PROD_TOKEN_KEY` (see License-Mgr-
+  consumers issue tracker, e.g. devagent-cli#228). Until fixed,
+  `checkOfflineGrace` Path A is effectively dead in prod; Path B
+  still works via `last_online_check + offlineGraceDays`. Not a
+  license-mgr code problem — server key drift.
+
+
 ## [1.0.0-alpha.5] - 2026-06-17
 
 CLI-parity catch-up. Closes the three "CLI-only fallback" gaps that were

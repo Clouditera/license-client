@@ -97,8 +97,10 @@ export {
   collectFingerprint,
   collectFingerprintComponents,
   matchFingerprint,
+  setFingerprintCollector,
 } from './fingerprint.js';
 export type { FingerprintComponents } from './fingerprint.js';
+export type { FingerprintCollector } from './fingerprint.js';
 
 // ---------------------------------------------------------------------------
 // Persistence (license + activation-meta on disk)
@@ -178,4 +180,4 @@ export {
 } from './license-service.js';
 export type { BinaryDownloadHooks, HostEnvironment, ServiceLogger } from './license-service.js';
 
-export const VERSION = '1.0.0-alpha.5';
+export const VERSION = '1.0.0-alpha.6';

@@ -37,9 +37,18 @@ vi.mock('./refresh-state.js', () => ({
   isWithinCooldown: vi.fn(() => false),
 }));
 
-vi.mock('./fingerprint.js', () => ({
-  collectFingerprint: vi.fn(),
-}));
+vi.mock('./fingerprint.js', () => {
+  // Share the same fn behind both public + internal exports so existing tests
+  // that drive `collectFingerprint.mockResolvedValue(...)` keep working —
+  // license-service now imports the override-aware wrapper which falls back
+  // to collectFingerprint when no host override is set.
+  const sharedCollector = vi.fn();
+  return {
+    collectFingerprint: sharedCollector,
+    _collectFingerprintWithOverride: sharedCollector,
+    setFingerprintCollector: vi.fn(),
+  };
+});
 
 vi.mock('./online-client.js', () => ({
   onlineActivate: vi.fn(),

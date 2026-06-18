@@ -382,3 +382,33 @@ describe('fingerprint platform collectors', () => {
     );
   });
 });
+
+describe('setFingerprintCollector — host override', () => {
+  it('delegates to the host-provided collector when set', async () => {
+    vi.resetModules();
+    const fp = await import('./fingerprint.js');
+
+    const override = vi.fn().mockResolvedValue('aa'.repeat(32));
+    fp.setFingerprintCollector(override);
+
+    const got = await fp._collectFingerprintWithOverride('/x/configDir', { skipCache: true });
+    expect(got).toBe('aa'.repeat(32));
+    expect(override).toHaveBeenCalledWith('/x/configDir', { skipCache: true });
+
+    fp.setFingerprintCollector(null); // restore
+  });
+
+  it('falls back to built-in collector when no override is set', async () => {
+    vi.resetModules();
+    const fp = await import('./fingerprint.js');
+    fp.setFingerprintCollector(null);
+
+    // No override → call goes through to collectFingerprint, which on this
+    // host throws "Insufficient hardware identifiers" (matching the test
+    // suite's hostile environment). We only assert the fallback wiring fires,
+    // not the collector's verdict — that's covered above.
+    await expect(
+      fp._collectFingerprintWithOverride(undefined, { skipCache: true })
+    ).rejects.toThrow(/Insufficient hardware identifiers|fingerprint/i);
+  });
+});

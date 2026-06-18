@@ -25,6 +25,44 @@ const execFileAsync = promisify(execFile);
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // ---------------------------------------------------------------------------
+// Collector injection (host-side override)
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-provided fingerprint collector. When set, `LicenseService.initialize()`
+ * and `_processActivation()` delegate to this function instead of the built-in
+ * `collectFingerprint`. Use this to plug in host-specific durability layers
+ * (e.g. CortexDev-CLI keeps a permanent `fingerprint-lock.json` so a license
+ * survives a transient hardware-probe failure long after the 24h cache TTL).
+ *
+ * Default = built-in collector (cache + fresh, no lock).
+ */
+export type FingerprintCollector = (
+  configDir?: string,
+  opts?: { skipCache?: boolean }
+) => Promise<string>;
+
+let collectorOverride: FingerprintCollector | null = null;
+
+export function setFingerprintCollector(fn: FingerprintCollector | null): void {
+  collectorOverride = fn;
+}
+
+/**
+ * Internal entry point used by license-service.ts. Honours the host override
+ * when set; otherwise falls back to the built-in collector. Adapters MUST NOT
+ * call this directly — use `collectFingerprint` from this module's public
+ * surface, which keeps the cache-only contract intact.
+ */
+export async function _collectFingerprintWithOverride(
+  configDir?: string,
+  opts: { skipCache?: boolean } = {}
+): Promise<string> {
+  if (collectorOverride) return collectorOverride(configDir, opts);
+  return collectFingerprint(configDir, opts);
+}
+
+// ---------------------------------------------------------------------------
 // Platform-specific hardware collectors (async)
 // ---------------------------------------------------------------------------
 
