@@ -164,6 +164,35 @@ pnpm ci            # 本地完整 CI（fail-fast）
 | `src/online-client.ts` | `src/main/core/license/online-client.ts` | ✅ |
 | `src/license-service.ts` | `src/main/core/license/license-service.ts` | ✅ |
 
+## 诊断工具
+
+`scripts/` 目录下两个独立脚本，用于排查"客户端 `verifyOnlineCheckToken` 返回 `invalid_signature` 但 `/refresh` 本身成功"这一类问题（典型代表：上游 `devagent-cli#228`）。
+
+| 脚本 | 跑在哪里 | 作用 |
+|---|---|---|
+| `scripts/diagnose-token-key.mjs` | 客户端本地（Node） | 打印客户端嵌入的 `PROD_TOKEN_KEY` / `DEV_TOKEN_KEY` 的 SHA-256 DER 指纹；若给出 `online-check.json` 路径还会本地验签 |
+| `scripts/server-side-fingerprint-worker.ts` | 服务端 Cloudflare Worker | 从 `env.TOKEN_SIGNING_KEY` 读私钥 → 派生公钥 → 输出 SHA-256 DER 指纹 + 与客户端 expected 的对比结果 |
+
+### 用法
+
+**客户端：**
+
+```bash
+pnpm diagnose:token-key                          # 自动找 ~/.devagent-pro/license/online-check.json
+pnpm diagnose:token-key /path/to/online-check.json
+```
+
+**服务端**（Cloudflare Worker — DEPLOY → CALL ONCE → DELETE）：
+
+1. 把 `scripts/server-side-fingerprint-worker.ts` 集成进生产 Worker（或作为独立 Worker 部署）
+2. `wrangler secret put ADMIN_DIAG_TOKEN`（32 字节随机值）
+3. `wrangler deploy`
+4. `curl -H "X-Admin-Token: <token>" https://<worker>/admin/token-key-fingerprint`
+5. 比对返回 JSON 里的 `sha256_der` 与 `expected` 是否一致
+6. **收尾**：从源码删除该路由 → `wrangler deploy` → `wrangler secret delete ADMIN_DIAG_TOKEN`
+
+三种结果的诊断含义见脚本文件头部注释。
+
 ## 路线图
 
 详见上游需求文档 §1.4 Phase 1–8。当前处于 Phase 1（抽取与发布）末尾，正准备 Phase 2（CortexDev-Agents 接入替换）。
