@@ -1,11 +1,11 @@
 /**
- * TypeScript type definitions for the license-mgr system.
+ * TypeScript type definitions for the license-client system.
  *
  * Ported from CortexDev-Agents/src/main/core/license/types.ts and
  * vendor/cortexdev-pro/packages/core/src/license/ — kept byte-compatible with
  * the existing license format so all in-the-field licenses continue to validate
  * after consumers switch from the embedded implementation to @clouditera/
- * license-mgr.
+ * license-client.
  *
  * SECURITY: All license validation logic runs exclusively in the host process
  * (Electron main, or a CLI process). When a consumer surfaces status to a

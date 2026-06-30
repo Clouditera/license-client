@@ -1,7 +1,7 @@
 /**
  * Lightweight temp-dir fixture for unit tests.
  * Inlined copy of CortexDev-Agents/test/fixtures/fs.ts (createTempDir only)
- * so license-mgr has zero workspace dependencies.
+ * so license-client has zero workspace dependencies.
  */
 
 import fs from 'node:fs';
@@ -15,7 +15,7 @@ export interface TempDir {
   cleanup: () => void;
 }
 
-export function createTempDir(prefix = 'license-mgr-test-'): TempDir {
+export function createTempDir(prefix = 'license-client-test-'): TempDir {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   return {
     path: dir,

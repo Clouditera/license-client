@@ -23,7 +23,7 @@
 
 操作：
 ```bash
-cd /Users/lijunchao/cortexdev-pro/license-mgr
+cd /Users/lijunchao/cortexdev-pro/license-client
 bash scripts/swap-prod-token-key.sh /path/to/prod-token-signing-priv.pem
 ```
 
@@ -32,9 +32,9 @@ bash scripts/swap-prod-token-key.sh /path/to/prod-token-signing-priv.pem
 2. 二次确认后 `wrangler secret put` + `wrangler deploy --env production`
 3. 提示客户端侧用 `pnpm diagnose:token-key` 验证
 
-成本：~5 分钟，零客户端变更，零 license-mgr 发版。
+成本：~5 分钟，零客户端变更，零 license-client 发版。
 
-### Path B — 接受 `b6fc63...` 为新事实，更新 license-mgr 嵌入公钥
+### Path B — 接受 `b6fc63...` 为新事实，更新 license-client 嵌入公钥
 
 适用：找不到 PROD_TOKEN_KEY 对应私钥。
 
@@ -43,7 +43,7 @@ bash scripts/swap-prod-token-key.sh /path/to/prod-token-signing-priv.pem
 #    重新部署 issue228Handler 改一下：导出 SPKI PEM 而不是指纹
 #    或者：直接看 wrangler.toml 是否能找到当时的 prod-public.pem
 
-# 2. 替换 license-mgr 嵌入公钥
+# 2. 替换 license-client 嵌入公钥
 #    编辑 src/token-key.ts:62 PROD_TOKEN_KEY = `..."b6fc63..." 对应的公钥 PEM`
 
 # 3. 隔离性自检
@@ -57,20 +57,20 @@ pnpm ci
 git tag v1.0.0-alpha.7
 git push --tags
 
-# 5. 所有客户端产品升级 license-mgr
-#    DevAgent-App: pnpm add @clouditera/license-mgr@1.0.0-alpha.7
-#    DevAgent-CLI: 同上，bump packages/license-mgr submodule
+# 5. 所有客户端产品升级 license-client
+#    DevAgent-App: pnpm add @clouditera/license-client@1.0.0-alpha.7
+#    DevAgent-CLI: 同上，bump packages/license-client submodule
 #    DevEye / DevEyeProd: 同上
 ```
 
-成本：私钥不用找，但需要一次 license-mgr minor + 跨产品升级。老版本客户端 D4 永远 fail（Path B grace 兜着）。
+成本：私钥不用找，但需要一次 license-client minor + 跨产品升级。老版本客户端 D4 永远 fail（Path B grace 兜着）。
 
 ### Path C — 彻底轮换（生成全新密钥对）
 
 适用：怀疑 `b6fc63...` 是被泄露过 / 来源不明 / 不想沿用。
 
 ```bash
-cd /Users/lijunchao/cortexdev-pro/license-mgr
+cd /Users/lijunchao/cortexdev-pro/license-client
 
 # 1. 生成新 P-256 keypair（输出到 token-keys/，已 gitignore）
 node scripts/gen-prod-token-key.mjs
@@ -78,14 +78,14 @@ node scripts/gen-prod-token-key.mjs
 # 2. 上传新私钥到 Worker
 cd /Users/lijunchao/cortexdev-pro/license-tools/server
 wrangler secret put TOKEN_SIGNING_PRIVATE_KEY --env production \
-  < /Users/lijunchao/cortexdev-pro/license-mgr/token-keys/prod-token-private.pem
+  < /Users/lijunchao/cortexdev-pro/license-client/token-keys/prod-token-private.pem
 wrangler deploy --env production
 
-# 3. 把新公钥写进 license-mgr/src/token-key.ts
+# 3. 把新公钥写进 license-client/src/token-key.ts
 # 用 prod-token-public.pem 内容替换 PROD_TOKEN_KEY
 
 # 4. 自检
-cd /Users/lijunchao/cortexdev-pro/license-mgr
+cd /Users/lijunchao/cortexdev-pro/license-client
 pnpm run verify:trust-root
 
 # 5. 发版（同 Path B step 4-5）
@@ -114,7 +114,7 @@ rm -P token-keys/prod-token-private.pem     # macOS
 devagent license refresh   # 或对应产品的等价命令
 
 # 2. 客户端本地诊断
-cd /Users/lijunchao/cortexdev-pro/license-mgr
+cd /Users/lijunchao/cortexdev-pro/license-client
 pnpm diagnose:token-key
 # 期望: "=> Path A is healthy. checkOfflineGrace() would authorize offline."
 ```
@@ -126,5 +126,5 @@ pnpm diagnose:token-key
 ## 5. 完成后
 
 - close [devagent-cli#228](https://github.com/Clouditera/DevAgent-Cli/issues/228)，附 verdict + path 编号
-- 在 license-mgr README "诊断工具"章节加一行：本 runbook 路径
+- 在 license-client README "诊断工具"章节加一行：本 runbook 路径
 - 删除本 runbook 中 `b316b81c...` / `b6fc63f6...` / `9d93c86d...` 三个指纹是公开信息（公钥派生），无需脱敏

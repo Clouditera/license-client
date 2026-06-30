@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================
 # Rotate Worker TOKEN_SIGNING_PRIVATE_KEY to match the keypair whose
-# public half is embedded as PROD_TOKEN_KEY in @clouditera/license-mgr.
+# public half is embedded as PROD_TOKEN_KEY in @clouditera/license-client.
 #
 # Originally written for issue devagent-cli#228 (Path A). Designed to be
 # re-usable for future rotations — the EXPECTED fingerprint is derived
-# from license-mgr's src/token-key.ts at runtime, so bumping the
+# from license-client's src/token-key.ts at runtime, so bumping the
 # embedded key does NOT require editing this script.
 #
 # Resolution order for the EXPECTED fingerprint:
 #   1. CLI flag      --expected-fp=<hex>
 #   2. Env var       EXPECTED_FP=<hex>
 #   3. Auto-derived  scripts/derive-prod-token-fp.mjs reads
-#                    license-mgr/src/token-key.ts and computes the
+#                    license-client/src/token-key.ts and computes the
 #                    SHA-256 DER fingerprint of PROD_TOKEN_KEY.
 #
 # What it does:

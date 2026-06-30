@@ -41,7 +41,7 @@
  *   • sha256_der != EXPECTED, no match  → server uses a third unknown
  *                                          keypair; either rotate the
  *                                          Worker secret OR re-issue
- *                                          license-mgr with a new
+ *                                          license-client with a new
  *                                          PROD_TOKEN_KEY public half.
  *
  * No external dependencies. Pure WebCrypto + standard Worker APIs.

@@ -2,7 +2,7 @@
  * Tests for token-key.ts — D4 trust-root isolation.
  *
  * Ported from devagent-cli `packages/core/tests/license-token-key.test.js` (T3.1)
- * with two structural adaptations for license-mgr:
+ * with two structural adaptations for license-client:
  *   - Build mode is controlled via `setProductionBuildResolver()` (not the
  *     `DEVAGENT_PRO_BUILD=production` env var the CLI uses).
  *   - Module re-loading uses `vi.resetModules()` + dynamic import (vitest

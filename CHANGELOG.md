@@ -24,7 +24,7 @@ for hosts that don't install a custom fingerprint collector.
   Use case: CortexDev-CLI's `packages/core/src/license/fingerprint.js`
   wraps the built-in collector with a permanent `fingerprint-lock.json`
   fallback that survives a transient hardware-probe failure long after
-  the 24h cache TTL. Without this injection point, license-mgr's own
+  the 24h cache TTL. Without this injection point, license-client's own
   collector falsely locks out an established user whose ioreg / WMI
   probe returns 0 components on a given startup.
 - `_collectFingerprintWithOverride()` — internal entry point used by
@@ -60,11 +60,11 @@ for hosts that don't install a custom fingerprint collector.
 ### Known issues
 
 - Server-issued `online_check_token` signature verification fails
-  against the client's embedded `PROD_TOKEN_KEY` (see License-Mgr-
+  against the client's embedded `PROD_TOKEN_KEY` (see License-Client-
   consumers issue tracker, e.g. devagent-cli#228). Until fixed,
   `checkOfflineGrace` Path A is effectively dead in prod; Path B
   still works via `last_online_check + offlineGraceDays`. Not a
-  license-mgr code problem — server key drift.
+  license-client code problem — server key drift.
 
 
 ## [1.0.0-alpha.5] - 2026-06-17
@@ -172,8 +172,8 @@ Closes License-Mgr#1. No client-visible change for activate/refresh
 Phase 3 unblock release. Lands the `HostEnvironment.refreshIntervalMs` and
 `HostEnvironment.refreshStartupBudgetMs` injection points the CLI adapter
 needs to preserve its 3-day refresh cadence + 5-second startup budget on
-top of `@clouditera/license-mgr`. Without these, the CLI flipping its
-default to license-mgr would 3x server traffic and risk slow startup on
+top of `@clouditera/license-client`. Without these, the CLI flipping its
+default to license-client would 3x server traffic and risk slow startup on
 degraded networks. Closes License-Mgr#3.
 
 Wire URL unchanged. Default behaviour preserved when fields are unset
@@ -200,7 +200,7 @@ Wire URL unchanged. Default behaviour preserved when fields are unset
 ## [1.0.0-alpha.2] - 2026-06-17
 
 D4 (`online_check_token`) + R1 byte-equivalence catch-up against CLI legacy.
-First version of `@clouditera/license-mgr` that DevAgent-CLI (or any future
+First version of `@clouditera/license-client` that DevAgent-CLI (or any future
 CLI consumer) can adopt without losing functionality or security guard-rails
 that the CLI legacy implementation already ships. Closes the gap surfaced
 during Phase 3 prep on 2026-06-16 (see License-Mgr#2).
@@ -232,7 +232,7 @@ D4 stack (server-signed offline grace assertion):
   honoured from `HostEnvironment`.
 - D4 types: `SignedToken`, `OnlineCheckVerdict`, `OnlineCheckFile`, `OfflineGraceResult`.
 - `HostEnvironment.offlineGraceDays?: number` — adapter-injected grace window.
-  Default 14 (preserves license-mgr pre-D4 contract); CLI adapter passes 60.
+  Default 14 (preserves license-client pre-D4 contract); CLI adapter passes 60.
 - `HostEnvironment.requireSignedToken?: boolean` — compliance hardening, refuses
   Path B entirely. Mirrors CLI `LICENSE_REQUIRE_SIGNED_TOKEN=true` env.
 - activate() / doRefreshNow() — both persist the D4 token to `online-check.json`

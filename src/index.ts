@@ -1,5 +1,5 @@
 /**
- * @clouditera/license-mgr
+ * @clouditera/license-client
  *
  * Standalone license management module shared by DevAgent-App, DevAgent-CLI,
  * DevEye, DevEyeProd and future Clouditera products.

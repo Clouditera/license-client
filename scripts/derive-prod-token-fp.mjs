@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Print the SHA-256 DER fingerprint of the PROD_TOKEN_KEY embedded in
- * license-mgr's src/token-key.ts.
+ * license-client's src/token-key.ts.
  *
  * This is the "single source of truth" — whatever the client currently
  * trusts. swap-prod-token-key.sh uses this as the EXPECTED fingerprint
