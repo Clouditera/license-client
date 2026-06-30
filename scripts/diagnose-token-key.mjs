@@ -65,7 +65,7 @@ function pemFingerprint(pem) {
 }
 
 // ---------------------------------------------------------------------------
-// Canonicalize + verify — duplicates license-mgr's verifier inline so this
+// Canonicalize + verify — duplicates license-client's verifier inline so this
 // script never needs the built dist.
 // ---------------------------------------------------------------------------
 

@@ -28,7 +28,7 @@
  *
  * Implementation note: this script is intentionally self-contained (uses only
  * node:crypto and node:fs) so it can run standalone without needing the
- * compiled @clouditera/license-mgr build artifact.
+ * compiled @clouditera/license-client build artifact.
  */
 
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';

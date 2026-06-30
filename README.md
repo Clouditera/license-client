@@ -1,4 +1,4 @@
-# @clouditera/license-mgr
+# @clouditera/license-client
 
 > Standalone license management module extracted from `CortexDev-Agents/src/main/core/license/`.
 > Status: **alpha (v1.0.0-alpha.0)** — port complete, awaiting downstream wire-up.
@@ -22,11 +22,11 @@ V1 阶段（NPM 内部 registry 未就绪）：
 
 ```bash
 # Git URL + tag（推荐）
-pnpm add git+ssh://git@github.com/Clouditera/license-mgr.git#v1.0.0
+pnpm add git+ssh://git@github.com/Clouditera/license-client.git#v1.0.0
 
 # 或 GitHub Packages
 echo "@clouditera:registry=https://npm.pkg.github.com" >> .npmrc
-pnpm add @clouditera/license-mgr
+pnpm add @clouditera/license-client
 ```
 
 ## 解耦设计
@@ -55,7 +55,7 @@ import {
   setServiceLogger,
   setProductionBuildResolver,
   setLegacyKeyHitListener,
-} from '@clouditera/license-mgr';
+} from '@clouditera/license-client';
 
 setProductionBuildResolver(() => app.isPackaged);
 setHostEnvironment({
@@ -79,7 +79,7 @@ import {
   LicenseService,
   setHostEnvironment,
   setProductionBuildResolver,
-} from '@clouditera/license-mgr';
+} from '@clouditera/license-client';
 
 setProductionBuildResolver(() => true);
 setHostEnvironment({ isPackaged: () => true });

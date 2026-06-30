@@ -116,7 +116,7 @@ export interface HostEnvironment {
    *   - DevAgent-App historical default: 14
    *   - DevAgent-CLI historical default: 60
    * Adapters wire this to whichever value preserves their existing user
-   * behaviour. Defaults to 14 to preserve license-mgr's pre-D4 contract.
+   * behaviour. Defaults to 14 to preserve license-client's pre-D4 contract.
    */
   offlineGraceDays?: number;
   /**
@@ -130,7 +130,7 @@ export interface HostEnvironment {
   /**
    * Override the steady-state refresh interval (ms) between successful
    * `/refresh` calls. Default `REFRESH_INTERVAL_MS` (24h) preserves
-   * license-mgr / DevAgent-App behaviour. CLI adapter passes
+   * license-client / DevAgent-App behaviour. CLI adapter passes
    * `3 * 24 * 60 * 60 * 1000` to match its legacy 3-day cadence.
    *
    * Failure-path retries (REFRESH_RETRY_MS = 30min backoff) are NOT
@@ -141,7 +141,7 @@ export interface HostEnvironment {
    * Wall-clock budget (ms) for the `initialize()` startup refresh path.
    * When set + exceeded, the startup refresh aborts and falls back to
    * offline grace, matching CLI `refresh.js: STARTUP_BUDGET_MS = 5000`.
-   * Default `undefined` = unlimited (current license-mgr behaviour).
+   * Default `undefined` = unlimited (current license-client behaviour).
    *
    * Only the initial startup refresh consults this budget; subsequent
    * periodic refreshes use the steady-state interval without a budget.
@@ -816,7 +816,7 @@ export class LicenseService {
   }
 
   private _buildFatalRecord(rejection: RefreshRejectionReason): FatalRecord {
-    // RefreshRejectionReason → FatalRecord.reason mapping. license-mgr's
+    // RefreshRejectionReason → FatalRecord.reason mapping. license-client's
     // current rejection alphabet is narrower than CLI's; map to the closest
     // legacy bucket so printLockoutBox copy stays useful.
     const reason: FatalRecord['reason'] =

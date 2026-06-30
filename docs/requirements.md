@@ -4,7 +4,7 @@
 > **日期**：2026-06-09
 > **作者**：lc-kendo（与 AI 协作起草）
 > **范围**：原样抽取现有 License 能力为独立模块，**行为不变、形态独立**
-> **目标产物**：独立仓库 `@clouditera/license-mgr`（NPM 包），供 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品共享
+> **目标产物**：独立仓库 `@clouditera/license-client`（NPM 包），供 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品共享
 
 ---
 
@@ -16,7 +16,7 @@
 | 2 | 在线能力 | **保留**：activate、refresh、14 天离线宽限、远程吊销、设备数管控、时钟防回拨 |
 | 3 | 公钥分发 | **嵌入式**（主模块内置 PROD_KEY + LEGACY_KEYS） |
 | 4 | 多语言绑定 | **不做**（仅 TypeScript / Node.js / Electron） |
-| 5 | 仓库归属 | **独立仓库** `Clouditera/license-mgr` |
+| 5 | 仓库归属 | **独立仓库** `Clouditera/license-client` |
 | 6 | 内部 NPM registry | **暂不可用**，走 Git URL + tag 或 GitHub Packages |
 | 7 | 签发端归属 | 在 `Clouditera/devagent-cli` 仓库（与 DevAgent-CLI 同仓） |
 | 8 | 消费者关系 | **同产品线内对等共享**（DevAgent-App ↔ DevAgent-CLI 共享 license；DevEye ↔ DevEyeProd 共享 license；跨产品线独立），与当前 DevAgent 系现状一致 |
@@ -76,7 +76,7 @@
 
 ### 1.2 目标
 
-将上述能力**整体提取**为独立模块 `@clouditera/license-mgr`，做**事实统一源**（single source of truth），供 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品共享。
+将上述能力**整体提取**为独立模块 `@clouditera/license-client`，做**事实统一源**（single source of truth），供 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品共享。
 
 **一句话目标**：消灭两份重复实现，把 license 能力做成**一个仓库、一个包、一套测试、一套发布流程**。
 
@@ -84,7 +84,7 @@
 
 **做**：
 
-- ✅ 整体源码抽取（含测试）到独立仓库 `Clouditera/license-mgr`
+- ✅ 整体源码抽取（含测试）到独立仓库 `Clouditera/license-client`
 - ✅ 解耦 Electron 依赖（`electron.app` / `@main/lib/logger` / `@shared/brand` / `@shared/result` / `@shared/ipc/rpc`）→ 改为构造参数注入
 - ✅ 提供 TypeScript 双产物（ESM + CJS），完整 `.d.ts`
 - ✅ 提供与现有 `src/main/core/license/` 字节级等价的行为（用现有测试套件回归）
@@ -111,14 +111,14 @@
 **接入分组**：
 
 - **基准组（迁移）**：DevAgent-App、DevAgent-CLI — 现状已有内嵌实现，本期目标是平迁
-- **扩展组（新接入）**：DevEye、DevEyeProd — 从零接入 license-mgr，不需要"双实现并存"灰度（因为没有 legacy）
+- **扩展组（新接入）**：DevEye、DevEyeProd — 从零接入 license-client，不需要"双实现并存"灰度（因为没有 legacy）
 
 ```
-Phase 1: 抽取与发布（Clouditera/license-mgr 仓库）
+Phase 1: 抽取与发布（Clouditera/license-client 仓库）
   - 从 src/main/core/license/ 整体迁移代码 + 测试到新仓库
   - 解耦 Electron 依赖（参数注入）
   - 同步从 vendor/cortexdev-pro/packages/core/src/license/ 校验算法一致性
-  - 发布 @clouditera/license-mgr@1.0.0-alpha.0（Git tag / GitHub Packages）
+  - 发布 @clouditera/license-client@1.0.0-alpha.0（Git tag / GitHub Packages）
 
 Phase 2: DevAgent-App 接入（双实现并存）
   - 新增 src/main/core/license/adapter-core.ts 包装新模块
@@ -127,7 +127,7 @@ Phase 2: DevAgent-App 接入（双实现并存）
   - 监控指标: 激活成功率、刷新成功率、状态分布、错误码分布
 
 Phase 3: DevAgent-CLI 接入（双实现并存）
-  - devagent-cli 仓库内同步切换到 @clouditera/license-mgr 依赖
+  - devagent-cli 仓库内同步切换到 @clouditera/license-client 依赖
   - 同样保留 legacy 兜底
   - 内部 dogfood 1-2 周
 
@@ -145,23 +145,23 @@ Phase 5: DevAgent 系旧代码删除
 Phase 6: DevEye / DevEyeProd 接入（扩展组）
   - 形态: CLI（与 DevAgent-CLI 一致，无 IPC / 渲染层适配）
   - configDir: 各自独立（`~/.deveye/license/` 与 `~/.deveye-prod/license/`，最终路径由 DevEye 团队确认）
-  - 各自仓库直接依赖 @clouditera/license-mgr（无 legacy 兜底，无切换灰度）
+  - 各自仓库直接依赖 @clouditera/license-client（无 legacy 兜底，无切换灰度）
   - 跨线 license 不共用：DevEye 系无法读 DevAgent 系 license，反之亦然（路径隔离）
   - 签发端按产品线签发：用户购买时一次只授权一条产品线
   - 时间窗口与 DevAgent 系解耦，独立排期
 
 Phase 7: 引入 product_codes 强密码学隔离（仓库迁移完成后）
-  - 触发条件: Phase 5 完成（DevAgent 系全部切到 license-mgr 后）
+  - 触发条件: Phase 5 完成（DevAgent 系全部切到 license-client 后）
   - 改动:
-    * license-mgr 校验流水线增加 product_codes 校验（必填，调用方 productCode 必须在列表中）
+    * license-client 校验流水线增加 product_codes 校验（必填，调用方 productCode 必须在列表中）
     * 签发端（Clouditera/devagent-cli 仓库内）schema 加 product_codes 必填字段
     * 存量 license 批量回填工具（按现有 license 所属产品线补 product_codes）
   - 风险: 这是破坏性变更，存量 license 必须先回填才能升级客户端
   - 升级策略:
-    * 客户端 license-mgr 升级到引入 product_codes 校验的版本 (≥1.x or 2.0)
+    * 客户端 license-client 升级到引入 product_codes 校验的版本 (≥1.x or 2.0)
     * 同时发布过渡版客户端，对缺失 product_codes 的 license 显示明确提示（"请联系管理员重新签发"）
     * 灰度: 先签发端回填 → 后客户端升级
-  - 不在本期范围: 时间排期、技术细节归 license-mgr V1.x / V2.x 单独立项
+  - 不在本期范围: 时间排期、技术细节归 license-client V1.x / V2.x 单独立项
 
 Phase 8: 其他演进（不在本文档范围）
   - 指纹算法 v2、Web/WebCrypto 版本、其他语言绑定等
@@ -181,7 +181,7 @@ Phase 8: 其他演进（不在本文档范围）
 | **DevEyeProd** | Node.js CLI | DevEye 系 | `~/.deveye-prod/license/`（独立） | P1（新接入） |
 | **未来产品 X/Y/Z** | TBD | TBD | 独立 configDir | P2 |
 
-**共享内核**：`@clouditera/license-mgr` 提供 `LicenseService` 类与全部纯函数。所有消费者消费**同一个完整 API**，**不拆 verifier / activator 角色**。
+**共享内核**：`@clouditera/license-client` 提供 `LicenseService` 类与全部纯函数。所有消费者消费**同一个完整 API**，**不拆 verifier / activator 角色**。
 
 #### License 文件路径策略（R9 已决策：产品线分组）
 
@@ -381,8 +381,8 @@ CLI 没有 IPC 概念，直接调用 `LicenseService` API。
 
 | 项 | 规格 |
 |---|---|
-| 包名 | `@clouditera/license-mgr` |
-| 仓库 | 独立 `Clouditera/license-mgr`（新建） |
+| 包名 | `@clouditera/license-client` |
+| 仓库 | 独立 `Clouditera/license-client`（新建） |
 | 语言 | TypeScript 5.x |
 | 产物 | ESM + CJS 双包，`.d.ts` 完整 |
 | Node 版本 | ≥ 18 |
@@ -468,7 +468,7 @@ CLI 没有 IPC 概念，直接调用 `LicenseService` API。
 
 | 方案 | 使用 |
 |---|---|
-| **Git URL + tag**（`git+ssh://git@github.com/Clouditera/license-mgr.git#v1.0.0`） | 首选，沿用 `vendor/cortexdev-pro` 模式 |
+| **Git URL + tag**（`git+ssh://git@github.com/Clouditera/license-client.git#v1.0.0`） | 首选，沿用 `vendor/cortexdev-pro` 模式 |
 | **GitHub Packages** | 备选，调用方 `.npmrc` 配置 GITHUB_TOKEN |
 
 **迁移**：内部 registry 就绪后补 publish 步骤，调用方平滑切换（`package.json` 替换依赖来源）。
@@ -481,7 +481,7 @@ CLI 没有 IPC 概念，直接调用 `LicenseService` API。
 // =============================================================================
 // 完整 API（与现有 LicenseService 一致）
 // =============================================================================
-import { LicenseService } from '@clouditera/license-mgr';
+import { LicenseService } from '@clouditera/license-client';
 
 const service = new LicenseService({
   configDir: '/Users/foo/.cortexdev-pro',          // 必填
@@ -525,7 +525,7 @@ import {
   writeLicense,
   onlineActivate,
   onlineRefresh,
-} from '@clouditera/license-mgr';
+} from '@clouditera/license-client';
 
 const licenseFile = readLicense('/path/to/configDir');
 const fingerprint = await collectFingerprint('/path/to/configDir', { skipCache: true });
@@ -545,7 +545,7 @@ import type {
   LicenseErrorReason,
   RefreshOutcome,
   Result,
-} from '@clouditera/license-mgr';
+} from '@clouditera/license-client';
 ```
 
 ---
@@ -583,14 +583,14 @@ import type {
 ### M5. 切换流程（详细）
 
 ```
-Phase 1: license-mgr 独立仓库建立 + 模块开发
-  仓库: Clouditera/license-mgr
+Phase 1: license-client 独立仓库建立 + 模块开发
+  仓库: Clouditera/license-client
   - 从 src/main/core/license/ 复制源码（保留所有逻辑）
   - 解耦 Electron 依赖（参数注入 isProductionBuild / userDataPath / logger）
   - 移除 @shared/* 依赖，内置 Result<T, E>
   - 复制测试套件，所有现有测试通过
   - 三平台 CI 全绿
-  - 发布 @clouditera/license-mgr@1.0.0-alpha.0
+  - 发布 @clouditera/license-client@1.0.0-alpha.0
 
 Phase 2: DevAgent-App 接入（双实现并存）
   - 新增 src/main/core/license/adapter-core.ts
@@ -620,7 +620,7 @@ Phase 5: 旧代码删除
 
 Phase 6: DevEye / DevEyeProd 接入
   各 CLI 仓库:
-    - 添加依赖 @clouditera/license-mgr
+    - 添加依赖 @clouditera/license-client
     - configDir 解析: 环境变量优先 + 默认 ~/.deveye/license/ 或 ~/.deveye-prod/license/
     - 直接消费 LicenseService 公共 API（无 IPC / 渲染层桥接）
   签发端:
@@ -628,14 +628,14 @@ Phase 6: DevEye / DevEyeProd 接入
   时间窗口: 与 DevAgent 系解耦，独立排期
 
 Phase 7: 引入 product_codes 强密码学隔离
-  license-mgr:
+  license-client:
     - 校验流水线增加 product_codes 校验
     - 主版本号 bump（视为破坏性变更）
   签发端:
     - schema 加 product_codes 必填字段
     - 存量 license 批量回填工具
   各客户端:
-    - 升级到含 product_codes 校验的 license-mgr 版本
+    - 升级到含 product_codes 校验的 license-client 版本
     - 过渡版客户端对缺失 product_codes 的 license 显示明确提示
   时间窗口: 仅在 Phase 5 完成后启动；签发端回填先于客户端升级
 
@@ -688,9 +688,9 @@ Phase 8: 进入功能演进期
 ### R2. Pro 二进制下载耦合（待设计阶段决策）
 
 - **现状**：`src/main/core/license/license-service.ts` 在 `activate` 成功后直接 `void downloadPro(...)`，触发 `src/main/core/cortexdev-pro/binary-downloader.ts`
-- **问题**：`binary-downloader` 是 DevAgent-App 内的模块，与 license 概念无关，跟着 license-mgr 抽取会扩大范围
+- **问题**：`binary-downloader` 是 DevAgent-App 内的模块，与 license 概念无关，跟着 license-client 抽取会扩大范围
 - **选项 A**：把 `downloadPro` 作为可选 callback 注入 LicenseService（解耦）
-- **选项 B**：license-mgr 完全不管下载，由调用方在 `onStatusChange` 回调里自己判断 license type 后触发
+- **选项 B**：license-client 完全不管下载，由调用方在 `onStatusChange` 回调里自己判断 license type 后触发
 - **选项 C**：连同 binary-downloader 一起抽取到另一个独立模块
 - **决策时机**：留给设计阶段（`license-standalone-design.md`）
 
@@ -700,7 +700,7 @@ Phase 8: 进入功能演进期
 - 任何紧急 bug 要 patch 两遍（legacy 一遍 + core 一遍）
 - 缓解：Phase 时长压缩到 4 周以内，避免长期双线
 
-### R4. license-mgr 独立仓库的基础设施搭建（已接受）
+### R4. license-client 独立仓库的基础设施搭建（已接受）
 
 - CI（macOS / Linux / Windows）
 - 发布流程（Git tag 自动 build + publish 到 GitHub Packages）
@@ -729,7 +729,7 @@ Phase 8: 进入功能演进期
 
 - **现状**：`license-service.ts initialize finally` 中调用 `cleanupStaleTmp(app.getPath('userData'))`，清理 Pro 二进制下载的临时文件
 - **问题**：DevAgent-CLI / DevEye / DevEyeProd 没有 `app.getPath('userData')`，路径概念不同
-- **选项**：把 `cleanupStaleTmp` 抽离出 license-mgr，由调用方在自己的启动流程中调用
+- **选项**：把 `cleanupStaleTmp` 抽离出 license-client，由调用方在自己的启动流程中调用
 - **决策时机**：设计阶段
 
 ### R9. License 文件路径策略（已对齐：产品线分组独立）
@@ -764,7 +764,7 @@ Phase 8: 进入功能演进期
 
 ## 八、验收标准（DoD）
 
-### license-mgr 模块发布（v1.0.0）前必须满足
+### license-client 模块发布（v1.0.0）前必须满足
 
 - [ ] 单元测试覆盖率 ≥ 现有水平
 - [ ] 三平台（macOS / Linux / Windows）CI 全绿
@@ -820,5 +820,5 @@ Phase 8: 进入功能演进期
 **下一步**：
 
 1. 本需求评审通过后，转 `license-standalone-design.md`（架构设计：模块划分、接口签名、文件结构、Pro 二进制下载耦合方案、cleanupStaleTmp 归属）
-2. 创建 `Clouditera/license-mgr` 仓库，搭建 CI / 发布流程
+2. 创建 `Clouditera/license-client` 仓库，搭建 CI / 发布流程
 3. 与 DevAgent-CLI 维护者对齐接入时间窗口（任意顺序，无依赖）

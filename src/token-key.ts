@@ -27,7 +27,7 @@
  *
  * NAMING NOTE: env var is `DEVAGENT_TOKEN_PUBLIC_KEY` (not CORTEXDEV_*) to
  * remain byte-equivalent with the CLI legacy implementation. The mismatch with
- * other license-mgr `CORTEXDEV_*` env vars is intentional and tracked in
+ * other license-client `CORTEXDEV_*` env vars is intentional and tracked in
  * docs/d4-design.md §7 Q-5.
  */
 
