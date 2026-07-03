@@ -31,7 +31,10 @@ export type {
   LicenseExpiredReason,
   LicenseFile,
   LicensePayload,
+  LicensePayloadV1,
+  LicensePayloadV2,
   LicenseStatus,
+  ProductCode,
   OfflineGraceResult,
   OnlineCheckFile,
   OnlineCheckVerdict,
@@ -42,12 +45,43 @@ export type {
   SignedToken,
 } from './types.js';
 
+// Runtime value export (KNOWN_PRODUCTS is `as const` array, not a type).
+export { KNOWN_PRODUCTS } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Host product identity — v2 payload enforcement (RFC-002)
+// ---------------------------------------------------------------------------
+
+export { getHostProductIdentity, setHostProductIdentity } from './host-identity.js';
+export type { HostProductIdentity } from './host-identity.js';
+
+// ---------------------------------------------------------------------------
+// SemVer satisfies (inline, RFC-002 §7 OQ-4 Alt-A)
+// ---------------------------------------------------------------------------
+
+export {
+  compareVersions,
+  isValidRange,
+  parseRange,
+  parseVersion,
+  satisfies,
+} from './semver-satisfies.js';
+
 // ---------------------------------------------------------------------------
 // Schema validation
 // ---------------------------------------------------------------------------
 
-export { isExpired, isExpiredWithServerTime, validatePayload } from './schema.js';
-export type { ValidationResult } from './schema.js';
+export {
+  checkProductCompatibility,
+  isExpired,
+  isExpiredWithServerTime,
+  validatePayload,
+} from './schema.js';
+export type {
+  ProductCompatibilityReason,
+  ProductCompatibilityResult,
+  ValidationResult,
+} from './schema.js';
 
 // ---------------------------------------------------------------------------
 // Token key (D4 trust root for online_check_token verification)
@@ -180,4 +214,17 @@ export {
 } from './license-service.js';
 export type { BinaryDownloadHooks, HostEnvironment, ServiceLogger } from './license-service.js';
 
-export const VERSION = '1.0.0-alpha.6';
+export const VERSION = '2.0.0-alpha.1';
+
+/**
+ * Runtime feature flag: this build of license-client understands RFC-002
+ * v2 payload fields (`product` + `product_version`).
+ *
+ * Adapters and cross-package tests can query this to route around versions
+ * that predate v2 without pinning `VERSION` strings — cheaper than parsing
+ * SemVer and stays stable across alpha / beta iterations.
+ *
+ * Once v2 hosts fully roll out and v1-only hosts are retired, this flag can
+ * be removed (all future builds will have v2 support baked in).
+ */
+export const LICENSE_SCHEMA_V2_SUPPORTED = true;
