@@ -60,8 +60,8 @@ SoiMJijUXGlEO71wfrEL8t/SQAnk3H1/eTGk+nEHjz7iMh39HuDcvINK6w==
  * Secret + GitHub Secret. See docs/d4-design.md §7 Q-1 for SOP.
  */
 const PROD_TOKEN_KEY = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqAQq6qwUsL6MVjtR9vs7z27Se4fC
-ogoFylACH70K9c5YHz9lZbUDLfm5Hx0CokjETppDQaXPUehmIm5Qhhp1SQ==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZfT4pxijFE6vL+zVwlqDAAeKBu+7
+MZ968GQQre/6e0REJ76m+ugryG7DMm5j+pzS/HtpTgv4UAvQCu4GlPQh0Q==
 -----END PUBLIC KEY-----`;
 
 /**

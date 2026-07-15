@@ -8,7 +8,7 @@
  * fingerprint so it can be compared against the client-embedded
  * PROD_TOKEN_KEY fingerprint:
  *
- *     b316b81c977b61ccf344207f07861b1e1e555c08e26f99ba96dcf1e34f79132d
+ *     010c6729dcc1e5566c851a815f875fe6572b5138d1b5618da2f6d7d1f47a3a4a
  *
  * Why this script exists:
  *   Cloudflare Worker secrets are write-only — `wrangler secret get` does
@@ -50,7 +50,7 @@
 // The fingerprint the client trusts. If the Worker returns anything
 // other than this value, the keypair is the source of the drift.
 const EXPECTED_PROD_FINGERPRINT =
-  'b316b81c977b61ccf344207f07861b1e1e555c08e26f99ba96dcf1e34f79132d';
+  '010c6729dcc1e5566c851a815f875fe6572b5138d1b5618da2f6d7d1f47a3a4a';
 
 interface Env {
   /** PEM-encoded EC P-256 private key in PKCS#8 — the actual signing key. */
