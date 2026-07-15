@@ -1,5 +1,10 @@
 # Issue #228 修复 runbook
 
+> ⛔ **DO NOT EXECUTE — HISTORICAL ONLY.** 本文档记录 2026-06 至 2026-07 期间关于
+> `PROD_TOKEN_KEY` 漂移的诊断与修复方案（Path A / B / C）。**所有 wrangler /
+> shell 命令块均不再适用于当前生产环境**，直接执行会破坏已在运行的密钥。
+> 生产环境已于 2026-07-15 完成 Path C 全量轮换。
+>
 > Status: **SUPERSEDED**（2026-07-15 Path C rotation 完成，见 license-tools issue #13）
 > 关联: [devagent-cli#228](https://github.com/Clouditera/DevAgent-Cli/issues/228) · [comment 2026-06-21](https://github.com/Clouditera/DevAgent-Cli/issues/228#issuecomment-4762102960)
 >
