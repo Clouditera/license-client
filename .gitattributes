@@ -1,0 +1,14 @@
+# Force LF line endings for all text files across all platforms.
+# Without this, Windows CI checkout applies CRLF and Prettier's format:check
+# fails on 30+ files while Ubuntu / macOS pass. See CI runs on PR #5.
+
+* text=auto eol=lf
+
+# Explicit binary types (avoid auto-detection surprises).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
