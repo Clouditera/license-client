@@ -27,7 +27,7 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -80,7 +80,10 @@ let tokenMod;
 let cryptoInternal;
 try {
   const distPath = join(repoRoot, 'dist', 'index.js');
-  const mod = await import(distPath);
+  // pathToFileURL is required on Windows: the default ESM loader rejects
+  // absolute paths with a drive-letter scheme (`d:\...`) and demands a
+  // proper `file:///d:/...` URL. Unix hosts accept both, so this normalises.
+  const mod = await import(pathToFileURL(distPath).href);
   tokenMod = {
     PROD_TOKEN_KEY: mod.PROD_TOKEN_KEY,
     DEV_TOKEN_KEY: mod.DEV_TOKEN_KEY,
