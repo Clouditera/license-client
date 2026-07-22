@@ -43,7 +43,7 @@ describe('fatal-state', () => {
       expect(readFatal(tmp.path)).toEqual(rec);
     });
 
-    it('writes the file with mode 0600', () => {
+    it.skipIf(process.platform === 'win32')('writes the file with mode 0600', () => {
       writeFatal(tmp.path, sampleRecord(new Date(NOW).toISOString()));
       const filePath = join(tmp.path, 'license', 'last-fatal.json');
       const mode = statSync(filePath).mode & 0o777;
