@@ -403,12 +403,19 @@ describe('setFingerprintCollector — host override', () => {
     const fp = await import('./fingerprint.js');
     fp.setFingerprintCollector(null);
 
-    // No override → call goes through to collectFingerprint, which on this
-    // host throws "Insufficient hardware identifiers" (matching the test
-    // suite's hostile environment). We only assert the fallback wiring fires,
-    // not the collector's verdict — that's covered above.
-    await expect(
-      fp._collectFingerprintWithOverride(undefined, { skipCache: true })
-    ).rejects.toThrow(/Insufficient hardware identifiers|fingerprint/i);
+    // No override → the call routes to the built-in `collectFingerprint`.
+    // The built-in's verdict is environment-dependent: a GitHub-hosted runner
+    // has enough hardware identifiers to succeed, whereas a sandboxed test
+    // rig may not. We only assert the fallback wiring is correct — i.e. the
+    // built-in was reached and produced *some* verdict (valid fingerprint
+    // OR a real error), not a wiring failure like "collector is not a
+    // function".
+    try {
+      const got = await fp._collectFingerprintWithOverride(undefined, { skipCache: true });
+      expect(got).toMatch(/^[0-9a-f]{64}$/);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toMatch(/Insufficient hardware identifiers|fingerprint/i);
+    }
   });
 });
