@@ -11,10 +11,7 @@ import {
   isExpiredWithServerTime,
   validatePayload,
 } from './schema.js';
-import {
-  _resetHostProductIdentityForTest,
-  setHostProductIdentity,
-} from './host-identity.js';
+import { _resetHostProductIdentityForTest, setHostProductIdentity } from './host-identity.js';
 import type { LicensePayload, LicensePayloadV2 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -372,9 +369,7 @@ describe('checkProductCompatibility()', () => {
 
   it('v2 product mismatch → product_mismatch', () => {
     setHostProductIdentity({ product: 'devagent-app', version: '1.0.0' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product: 'devagent-cli' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product: 'devagent-cli' }));
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('product_mismatch');
     expect(result.detail).toContain('devagent-cli');
@@ -383,17 +378,13 @@ describe('checkProductCompatibility()', () => {
 
   it('v2 product match + version range OK → ok', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.5.0' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product_version: '>=1.0.0 <2.0.0' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product_version: '>=1.0.0 <2.0.0' }));
     expect(result.ok).toBe(true);
   });
 
   it('v2 product match + version range fail → product_version_mismatch', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '2.0.0' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product_version: '>=1.0.0 <2.0.0' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product_version: '>=1.0.0 <2.0.0' }));
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('product_version_mismatch');
     expect(result.detail).toContain('2.0.0');
@@ -402,9 +393,7 @@ describe('checkProductCompatibility()', () => {
 
   it('v2 prerelease host rejected by plain range (strict SemVer)', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.0.0-alpha.6' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product_version: '>=1.0.0 <2.0.0' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product_version: '>=1.0.0 <2.0.0' }));
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('product_version_mismatch');
   });
@@ -412,16 +401,14 @@ describe('checkProductCompatibility()', () => {
   it('v2 prerelease host admitted by prerelease-inclusive range', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.0.0-alpha.6' });
     const result = checkProductCompatibility(
-      validV2Payload({ product_version: '>=1.0.0-alpha.6 <1.0.1' }),
+      validV2Payload({ product_version: '>=1.0.0-alpha.6 <1.0.1' })
     );
     expect(result.ok).toBe(true);
   });
 
   it('malformed range → product_version_range_invalid', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.0.0' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product_version: 'garbage' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product_version: 'garbage' }));
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('product_version_range_invalid');
     expect(result.detail).toContain('garbage');
@@ -429,9 +416,7 @@ describe('checkProductCompatibility()', () => {
 
   it('product match is case-sensitive', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.0.0' });
-    const result = checkProductCompatibility(
-      validV2Payload({ product: 'DevAgent-CLI' }),
-    );
+    const result = checkProductCompatibility(validV2Payload({ product: 'DevAgent-CLI' }));
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('product_mismatch');
   });

@@ -43,37 +43,37 @@ describe('host-identity', () => {
 
   it('throws when called with a DIFFERENT product', () => {
     setHostProductIdentity({ product: 'devagent-cli', version: '1.0.0' });
-    expect(() =>
-      setHostProductIdentity({ product: 'devagent-app', version: '1.0.0' }),
-    ).toThrow(/conflicting product identity/);
+    expect(() => setHostProductIdentity({ product: 'devagent-app', version: '1.0.0' })).toThrow(
+      /conflicting product identity/
+    );
     // Original identity should survive the failed overwrite attempt
     expect(getHostProductIdentity()?.product).toBe('devagent-cli');
   });
 
   it('rejects missing / empty product', () => {
-    expect(() =>
-      setHostProductIdentity({ product: '', version: '1.0.0' }),
-    ).toThrow(/product must be a non-empty string/);
+    expect(() => setHostProductIdentity({ product: '', version: '1.0.0' })).toThrow(
+      /product must be a non-empty string/
+    );
     expect(() =>
       // @ts-expect-error — deliberately violating the type
-      setHostProductIdentity({ version: '1.0.0' }),
+      setHostProductIdentity({ version: '1.0.0' })
     ).toThrow(/product must be a non-empty string/);
   });
 
   it('rejects missing / empty version', () => {
-    expect(() =>
-      setHostProductIdentity({ product: 'devagent-cli', version: '' }),
-    ).toThrow(/version must be a non-empty string/);
+    expect(() => setHostProductIdentity({ product: 'devagent-cli', version: '' })).toThrow(
+      /version must be a non-empty string/
+    );
     expect(() =>
       // @ts-expect-error — deliberately violating the type
-      setHostProductIdentity({ product: 'devagent-cli' }),
+      setHostProductIdentity({ product: 'devagent-cli' })
     ).toThrow(/version must be a non-empty string/);
   });
 
   it('rejects non-string product', () => {
     expect(() =>
       // @ts-expect-error — deliberately violating the type
-      setHostProductIdentity({ product: 123, version: '1.0.0' }),
+      setHostProductIdentity({ product: 123, version: '1.0.0' })
     ).toThrow(/product must be a non-empty string/);
   });
 

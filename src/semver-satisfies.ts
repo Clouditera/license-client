@@ -53,7 +53,7 @@ export function parseVersion(v: string): {
   const trimmed = v.trim().replace(/^v/i, '');
 
   const match = trimmed.match(
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/,
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/
   );
   if (!match) return null;
 
@@ -159,8 +159,8 @@ function expandToken(token: string): Comparator[] {
       throw new Error(`[semver] invalid caret range: ${JSON.stringify(t)}`);
     }
     const major = parts[0] ?? 0;
-    const minor = parts.length >= 2 ? parts[1] ?? 0 : 0;
-    const patch = parts.length >= 3 ? parts[2] ?? 0 : 0;
+    const minor = parts.length >= 2 ? (parts[1] ?? 0) : 0;
+    const patch = parts.length >= 3 ? (parts[2] ?? 0) : 0;
     const lower = `${major}.${minor}.${patch}`;
     // SemVer caret rules:
     //   ^1.2.3  → <2.0.0
@@ -188,7 +188,9 @@ function expandToken(token: string): Comparator[] {
   const op = (opRaw || '=') as Comparator['op'];
 
   if (!parseVersion(version)) {
-    throw new Error(`[semver] invalid version in comparator ${JSON.stringify(t)}: ${JSON.stringify(version)}`);
+    throw new Error(
+      `[semver] invalid version in comparator ${JSON.stringify(t)}: ${JSON.stringify(version)}`
+    );
   }
   return [{ op, version }];
 }

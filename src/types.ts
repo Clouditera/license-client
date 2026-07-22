@@ -43,12 +43,7 @@ export type ProductCode = string;
  * CLI can sign a license with any `product` string and the matching host can
  * declare it via `setHostProductIdentity`.
  */
-export const KNOWN_PRODUCTS = [
-  'devagent-cli',
-  'devagent-app',
-  'deveye',
-  'cloudshield',
-] as const;
+export const KNOWN_PRODUCTS = ['devagent-cli', 'devagent-app', 'deveye', 'cloudshield'] as const;
 
 /**
  * Discriminated union: v1 payload has no product/product_version; v2 requires

@@ -1,2 +1,9 @@
+# Single-package "workspace" — needed to activate the allowBuilds config below
+# (pnpm requires the packages field even when the repo isn't a monorepo).
+packages:
+  - '.'
+
+# Whitelist native build scripts. tsup's esbuild dependency requires this
+# under pnpm's default sandboxed install (pnpm 11+).
 allowBuilds:
   esbuild: true

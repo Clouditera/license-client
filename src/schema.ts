@@ -185,7 +185,7 @@ export interface ProductCompatibilityResult {
  */
 export function checkProductCompatibility(
   payload: LicensePayload,
-  identity: HostProductIdentity | null = getHostProductIdentity(),
+  identity: HostProductIdentity | null = getHostProductIdentity()
 ): ProductCompatibilityResult {
   // v1 payloads have no product binding — RFC-002 §2.6 legacy tolerance.
   if (payload.version === 1) {

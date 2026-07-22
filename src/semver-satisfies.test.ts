@@ -11,30 +11,15 @@ import {
 describe('parseVersion', () => {
   it.each([
     ['1.2.3', { major: 1, minor: 2, patch: 3, prerelease: [], build: [] }],
-    [
-      '0.0.0',
-      { major: 0, minor: 0, patch: 0, prerelease: [], build: [] },
-    ],
-    [
-      '10.20.30',
-      { major: 10, minor: 20, patch: 30, prerelease: [], build: [] },
-    ],
-    [
-      '1.0.0-alpha.6',
-      { major: 1, minor: 0, patch: 0, prerelease: ['alpha', '6'], build: [] },
-    ],
-    [
-      '1.0.0+build.1',
-      { major: 1, minor: 0, patch: 0, prerelease: [], build: ['build', '1'] },
-    ],
+    ['0.0.0', { major: 0, minor: 0, patch: 0, prerelease: [], build: [] }],
+    ['10.20.30', { major: 10, minor: 20, patch: 30, prerelease: [], build: [] }],
+    ['1.0.0-alpha.6', { major: 1, minor: 0, patch: 0, prerelease: ['alpha', '6'], build: [] }],
+    ['1.0.0+build.1', { major: 1, minor: 0, patch: 0, prerelease: [], build: ['build', '1'] }],
     [
       '1.2.3-rc.1+build.2',
       { major: 1, minor: 2, patch: 3, prerelease: ['rc', '1'], build: ['build', '2'] },
     ],
-    [
-      'v1.2.3',
-      { major: 1, minor: 2, patch: 3, prerelease: [], build: [] },
-    ],
+    ['v1.2.3', { major: 1, minor: 2, patch: 3, prerelease: [], build: [] }],
   ])('parses %s', (input, expected) => {
     expect(parseVersion(input)).toEqual(expected);
   });
@@ -43,7 +28,7 @@ describe('parseVersion', () => {
     'rejects malformed %j',
     (bad) => {
       expect(parseVersion(bad)).toBeNull();
-    },
+    }
   );
 });
 
@@ -277,12 +262,9 @@ describe('satisfies — real-world license scenarios', () => {
 });
 
 describe('isValidRange', () => {
-  it.each(['*', '1.2.3', '=1.2.3', '>=1.0.0 <2.0.0', '~1.2', '^1.2.3'])(
-    'accepts %s',
-    (r) => {
-      expect(isValidRange(r)).toBe(true);
-    },
-  );
+  it.each(['*', '1.2.3', '=1.2.3', '>=1.0.0 <2.0.0', '~1.2', '^1.2.3'])('accepts %s', (r) => {
+    expect(isValidRange(r)).toBe(true);
+  });
 
   it.each(['1 || 2', 'x.y.z', '', 'not-a-version'])('rejects %s', (r) => {
     expect(isValidRange(r)).toBe(false);

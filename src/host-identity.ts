@@ -56,7 +56,7 @@ export function setHostProductIdentity(identity: HostProductIdentity): void {
     throw new Error(
       `[license-client] setHostProductIdentity: conflicting product identity — ` +
         `already registered as ${JSON.stringify(hostIdentity.product)}, ` +
-        `refusing to overwrite with ${JSON.stringify(identity.product)}`,
+        `refusing to overwrite with ${JSON.stringify(identity.product)}`
     );
   }
 
