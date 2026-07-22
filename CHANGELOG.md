@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.1] - 2026-07-03
+
+### Added (RFC-002 P1 — v2 schema with product / product_version)
+
+Implements phase 1 of [RFC-002](https://github.com/Clouditera/license-tools/blob/main/docs/rfc/rfc-002-product-version-fields.md) in the license-client. Enables SKU-level license binding — a license can be locked to a specific product code and SemVer range, verified at every activation and refresh.
+
+**New public API:**
+
+- `setHostProductIdentity({product, version})` — idempotent setter (throws on conflicting product per §7 OQ-3). Should be called once at host bootstrap.
+- `getHostProductIdentity()` — returns current identity or null.
+- `checkProductCompatibility(payload, identity?)` — v1 payload passes through; v2 payload compared against host identity.
+- `satisfies(version, range)` — inline strict-SemVer satisfier (Alt-A per §7 OQ-4). Supports `*`, exact, `>=/>/</<=/=`, tilde, caret, space-separated AND. No `||`, hyphen, or x-ranges.
+- `parseVersion(v)`, `parseRange(r)`, `compareVersions(a,b)`, `isValidRange(r)` — helper exports.
+- `LICENSE_SCHEMA_V2_SUPPORTED = true` — runtime feature flag for adapters.
+- `KNOWN_PRODUCTS` — documentation-only array of currently-signed product codes.
+- New types: `LicensePayloadV1`, `LicensePayloadV2`, `ProductCode`, `HostProductIdentity`, `ProductCompatibilityReason`, `ProductCompatibilityResult`.
+
+**Type change (breaking on `LicensePayload`):**
+
+- `LicensePayload` is now a discriminated union: `LicensePayloadV1 | LicensePayloadV2`. Consumers narrowing on `payload.version === 1` continue to work; consumers assuming a flat interface may need to add a version discriminator.
+
+**New error reasons:**
+
+- `product_mismatch` — v2 payload's `product` doesn't equal the host identity's product.
+- `product_version_mismatch` — v2 host version doesn't satisfy the license's `product_version` range.
+- `product_version_range_invalid` — v2 `product_version` fails to parse as SemVer range.
+
+Error `LicenseStatus` variants for these carry a `productCompat` payload with license/host values for adapter lockout boxes.
+
+### Behavior notes (per RFC-002 §7 decisions)
+
+- **v1 licenses continue to validate** without any product binding (legacy tolerance per §2.6).
+- **v2 license with no host identity registered** → allow with warning: `serviceLogger.warn("[license-client] product identity not set; skipping v2 checks — this is a bug in the host bootstrap")` (OQ-2/OQ-8).
+- **`ProductCode` is `string`, not a locked enum** (OQ-1 revision-1) — new products can be added by admin CLI + host bootstrap alone, no license-client bump required. Design target: ~100 concurrent product codes.
+- **Strict SemVer semantics**: `product_version: '1.0.0'` does NOT accept a `1.0.0-alpha.6` host; admin must explicitly write `>=1.0.0-alpha.6 <1.0.1` for prerelease coverage (OQ-4).
+- **`checkProductCompatibility` is idempotent + pure** given a payload + identity — safe to call at both activation and every refresh.
+
+### Testing
+
+- 160 new tests across `host-identity.test.ts` (10), `semver-satisfies.test.ts` (99), and extensions to `schema.test.ts` (51). Full suite continues to pass, including all license-service integration paths.
+
 ## [1.0.0-alpha.6] - 2026-06-18
 
 Real-world adapter shake-down catch-up. Smoke testing the CLI adapter

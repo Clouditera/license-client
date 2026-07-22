@@ -1,13 +1,13 @@
 # @clouditera/license-client
 
 > Standalone license management module extracted from `CortexDev-Agents/src/main/core/license/`.
-> Status: **alpha (v1.0.0-alpha.0)** — port complete, awaiting downstream wire-up.
+> Status: **alpha (v2.0.0-alpha.1)** — RFC-002 schema v2 (product / product_version) landed.
 
 ## 范围
 
-为 DevAgent-App、DevAgent-CLI、DevEye、DevEyeProd 及未来产品提供统一的 license 校验与生命周期管理。**事实统一源**（single source of truth），替代当前两份内嵌实现（CortexDev-Agents 主进程 + cortexdev-pro CLI 内部）。
+为 DevAgent-App、DevAgent-CLI (pro edition)、DevEye、CloudShield 及未来产品提供统一的 license 校验与生命周期管理。**事实统一源**（single source of truth），替代当前两份内嵌实现（CortexDev-Agents 主进程 + cortexdev-pro CLI 内部）。
 
-完整需求文档：[`docs/requirements.md`](./docs/requirements.md)
+完整需求文档：[`docs/requirements.md`](./docs/requirements.md) · v2 schema：见上游 license-tools 仓的 [RFC-002](https://github.com/Clouditera/license-tools/blob/main/docs/rfc/rfc-002-product-version-fields.md)。
 
 ## 核心约束
 
@@ -128,6 +128,57 @@ ok(value), err(error)
 ```
 
 完整类型导出见 `src/index.ts`。
+
+## Product binding (v2 schema, RFC-002)
+
+从 v2.0.0-alpha.1 开始，license payload 支持两个新字段用于 SKU 级绑定：
+
+- **`product`** — 产品代码（case-sensitive 精确匹配）
+- **`product_version`** — 严格 SemVer range，如 `'*'`、`'>=1.0.0 <2.0.0'`、`'^1.2.3'`
+
+Host product 在 bootstrap 时通过 setter 声明自己身份：
+
+```typescript
+import { setHostProductIdentity } from '@clouditera/license-client';
+
+setHostProductIdentity({
+  product: 'devagent-cli',          // 见下方 KNOWN_PRODUCTS 常量
+  version: '1.0.0-alpha.6',         // 通常从 host 自己的 package.json 读
+});
+```
+
+license-client 在 activate + refresh 时会自动校验：
+
+- **v1 payload**（无 `product` / `product_version`）→ 通过（legacy tolerance）
+- **v2 payload + host identity 未注入** → 通过 **但触发 warning**：`serviceLogger.warn` 会记录一行 `[license-client] product identity not set; skipping v2 checks — this is a bug in the host bootstrap`
+- **v2 payload + product 不匹配** → `LicenseStatus { state: 'error', reason: 'product_mismatch' }`
+- **v2 payload + product 匹配但 version 不满足范围** → `reason: 'product_version_mismatch'`
+- **v2 payload 但 `product_version` 不是合法 range** → `reason: 'product_version_range_invalid'`
+
+出错的 `LicenseStatus` 会带 `productCompat` 字段用于 UI 提示（license/host 两侧的实际值）。
+
+### 已知产品
+
+`KNOWN_PRODUCTS` 常量列出当前发放 license 的产品：
+
+```typescript
+import { KNOWN_PRODUCTS } from '@clouditera/license-client';
+// ['devagent-cli', 'devagent-app', 'deveye', 'cloudshield']
+```
+
+**仅供文档 / IDE autocomplete，不做 runtime 强制**。ProductCode 类型是 `string`，未来新增产品**无需 bump license-client 版本**：admin 用新字符串签 license，新 host 传同一字符串给 setter 即可。
+
+### SemVer 语义
+
+`product_version` 使用**严格** SemVer：`>=1.0.0 <2.0.0` **不匹配** `1.0.0-alpha.6`（prerelease 严格小于 release）。admin 想覆盖 alpha 客户端必须显式写 `>=1.0.0-alpha.6 <1.0.1`。详细规则见 `src/semver-satisfies.ts` 文件头注释。
+
+### Feature flag
+
+```typescript
+import { LICENSE_SCHEMA_V2_SUPPORTED } from '@clouditera/license-client';
+```
+
+Runtime 常量，本 build 是否支持 v2。跨包 test / adapter 可用它探测能力，避免对 `VERSION` 字符串做 SemVer 解析。
 
 ## 环境变量
 

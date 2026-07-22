@@ -22,8 +22,38 @@
  * signature. Field order and key naming must match the signing tool exactly
  * because the signature is computed over the canonicalized JSON.
  */
-export interface LicensePayload {
-  /** Schema version. Always 1 for current format. */
+/**
+ * ProductCode identifies the host product a license is bound to. Intentionally
+ * typed as `string` (not a literal union) so new products can be added by admin
+ * CLI + host bootstrap WITHOUT bumping license-client. See RFC-002 §2.1.1
+ * (revision-1, 2026-07-02).
+ */
+export type ProductCode = string;
+
+/**
+ * Products currently issued licenses for (as of RFC-002 v2 launch).
+ *
+ * - `devagent-cli`  — pro edition ONLY. The lite edition does not require a
+ *                     license and MUST NOT call `setHostProductIdentity`.
+ * - `devagent-app`  — desktop electron host
+ * - `deveye`        — eye product
+ * - `cloudshield`   — cloudshield product
+ *
+ * Documentation / IDE-autocomplete only. NOT enforced at runtime — an admin
+ * CLI can sign a license with any `product` string and the matching host can
+ * declare it via `setHostProductIdentity`.
+ */
+export const KNOWN_PRODUCTS = ['devagent-cli', 'devagent-app', 'deveye', 'cloudshield'] as const;
+
+/**
+ * Discriminated union: v1 payload has no product/product_version; v2 requires
+ * both. TypeScript rejects mixing at compile time via the `version` literal.
+ */
+export type LicensePayload = LicensePayloadV1 | LicensePayloadV2;
+
+/** License payload schema version 1 (pre-RFC-002). Legacy tolerance keeps v1 accepted. */
+export interface LicensePayloadV1 {
+  /** Schema version literal. */
   version: 1;
   /** License type — 'pro' for paid, 'free' for open. */
   type: 'pro' | 'free';
@@ -47,6 +77,55 @@ export interface LicensePayload {
   expires_at: string | null;
   /** Feature flags granted by this license. */
   features: string[];
+}
+
+/** License payload schema version 2 (RFC-002). Adds product + product_version. */
+export interface LicensePayloadV2 {
+  /** Schema version literal. */
+  version: 2;
+  /** License type — 'pro' for paid, 'free' for open. */
+  type: 'pro' | 'free';
+  /** Unique identifier for this license (UUID). */
+  license_id: string;
+  /** Display name of the license holder. */
+  user: string;
+  /** Email address of the license holder. */
+  email: string;
+  /**
+   * Device fingerprint bound to this license (64-char lowercase hex SHA-256).
+   * Must be null for 'free' licenses.
+   */
+  fingerprint: string | null;
+  /** ISO-8601 timestamp when the license was issued. */
+  issued_at: string;
+  /**
+   * ISO-8601 timestamp when the license expires.
+   * Must be null for 'free' licenses; required for 'pro'.
+   */
+  expires_at: string | null;
+  /** Feature flags granted by this license. */
+  features: string[];
+
+  // === NEW (RFC-002) ===
+
+  /**
+   * The product SKU this license is bound to. license-client compares this
+   * against its own embedded product identity at activation time and refuses
+   * if they don't match (case-sensitive exact equality).
+   */
+  product: ProductCode;
+
+  /**
+   * SemVer range string that this license is valid for. license-client compares
+   * this against its own embedded version using strict-SemVer `satisfies()` at
+   * activation AND every refresh. Use '*' for unrestricted.
+   *
+   * Strict-SemVer means: `product_version: '1.0.0'` does NOT match a
+   * `1.0.0-alpha.6` host (prerelease is strictly less than the release). Admins
+   * wanting alpha-inclusive licenses must write ranges like
+   * `'>=1.0.0-alpha.6 <1.0.1'`.
+   */
+  product_version: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +328,25 @@ export type LicenseStatus =
        * activation; `current` is what the env now resolves to.
        */
       mismatch?: { issued: string; current: string };
+      /**
+       * v2 product/version compatibility mismatch. Present when
+       * `reason` is one of `product_mismatch`, `product_version_mismatch`,
+       * or `product_version_range_invalid`.
+       *
+       * - `licenseProduct` / `licenseProductVersion`: values from the
+       *   license payload
+       * - `hostProduct` / `hostVersion`: values declared via
+       *   `setHostProductIdentity`
+       *
+       * Adapters render this in the lockout box so users can distinguish
+       * "wrong product SKU" from "wrong version range".
+       */
+      productCompat?: {
+        licenseProduct: string;
+        licenseProductVersion: string;
+        hostProduct: string;
+        hostVersion: string;
+      };
     };
 
 // ---------------------------------------------------------------------------
@@ -303,7 +401,25 @@ export type LicenseErrorReason =
    * against the new server would pollute the wrong KV, so the gate blocks
    * before any network traffic. Carries the `mismatch` payload.
    */
-  | 'server_mismatch';
+  | 'server_mismatch'
+  /**
+   * A v2 license was activated but its `product` does not match the host's
+   * declared identity (via `setHostProductIdentity`). Carries the
+   * `product_mismatch` payload for lockout diagnostics.
+   */
+  | 'product_mismatch'
+  /**
+   * A v2 license was activated but the host's version does not satisfy the
+   * license's `product_version` range. Carries the `product_version_mismatch`
+   * payload for lockout diagnostics.
+   */
+  | 'product_version_mismatch'
+  /**
+   * A v2 license was activated but its `product_version` is not a valid
+   * SemVer range. Distinct from `product_version_mismatch` — this means
+   * admin signed a garbage range, not that the host is out-of-range.
+   */
+  | 'product_version_range_invalid';
 
 // ---------------------------------------------------------------------------
 // Refresh outcome (returned by doRefreshNow → IPC `license.refresh`)

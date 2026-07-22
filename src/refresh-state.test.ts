@@ -40,7 +40,7 @@ describe('refresh-state', () => {
       expect(readRefreshState(tmp.path)).toEqual(rec);
     });
 
-    it('writes the file with mode 0600', () => {
+    it.skipIf(process.platform === 'win32')('writes the file with mode 0600', () => {
       writeRefreshState(tmp.path, sampleState(new Date(NOW).toISOString()));
       const filePath = join(tmp.path, 'license', 'refresh-state.json');
       const mode = statSync(filePath).mode & 0o777;

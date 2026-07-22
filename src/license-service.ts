@@ -36,6 +36,7 @@ import {
   writeFatal,
 } from './fatal-state.js';
 import { _collectFingerprintWithOverride } from './fingerprint.js';
+import { getHostProductIdentity } from './host-identity.js';
 import { verifyOnlineCheckToken } from './online-check.js';
 import { readOnlineCheck, writeOnlineCheck } from './online-check-store.js';
 import {
@@ -72,6 +73,7 @@ import type {
   RefreshOutcome,
   RefreshRejectionReason,
 } from './types.js';
+import { checkProductCompatibility } from './schema.js';
 import { validateLicense } from './validator.js';
 
 // ---------------------------------------------------------------------------
@@ -990,6 +992,33 @@ export class LicenseService {
     });
 
     if (result.valid && result.license) {
+      // v2 product/version compatibility check (RFC-002). v1 payloads
+      // pass through unconditionally per legacy tolerance.
+      const compat = checkProductCompatibility(result.license);
+      if (compat.skipped && compat.warn) {
+        serviceLogger.warn(compat.warn);
+      }
+      if (!compat.ok) {
+        // Type narrowing: v2-only reason implies license is v2.
+        const license = result.license;
+        const hostIdent = getHostProductIdentity();
+        const productCompat =
+          license.version === 2 && hostIdent
+            ? {
+                licenseProduct: license.product,
+                licenseProductVersion: license.product_version,
+                hostProduct: hostIdent.product,
+                hostVersion: hostIdent.version,
+              }
+            : undefined;
+        return {
+          state: 'error',
+          reason: compat.reason ?? 'product_mismatch',
+          details: compat.detail,
+          license,
+          ...(productCompat ? { productCompat } : {}),
+        };
+      }
       return { state: 'active', license: result.license };
     }
 
